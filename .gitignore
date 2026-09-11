@@ -72,3 +72,5 @@ bq_coverage.py
 bq_gaps.csv
 
 probe_gaps_result.csv
+
+gaps_classified.csv
