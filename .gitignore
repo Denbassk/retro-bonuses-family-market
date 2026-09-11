@@ -42,3 +42,6 @@ Thumbs.db
 desktop.ini
 *.ico
 *.lnk
+
+# Serena (local memory and cache)
+.serena/

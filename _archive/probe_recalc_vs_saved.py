@@ -7,7 +7,7 @@ from collections import defaultdict
 ROOT = Path(__file__).resolve().parent.parent; sys.path.insert(0, str((ROOT) / "core")); os.chdir(ROOT)
 import sb
 
-src = ROOT / "_archive" / "recalc_now_2026-01_2026-08.csv"
+src = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "_archive" / "recalc_now_2026-01_2026-08.csv"
 rows = list(csv.reader(open(src, encoding="utf-8-sig"), delimiter=";"))
 head = rows[0]
 pers = [h for h in head if len(h) == 7 and h[4] == "-"]
@@ -36,7 +36,7 @@ for k, v in manual.items():
 print(f"[i] доп. выплат из админки вычтено из сохранённого: {len(manual)} пар на {sum(manual.values()):,.2f}"
       " (пересчёт с сохранением их СОТРЁТ, кроме approved)")
 
-keys = sorted(set(now) | set(saved), key=lambda k: (k[1], k[0]))
+keys = sorted({k for k in set(now) | set(saved) if k[1] in pers}, key=lambda k: (k[1], k[0]))
 diff = [(k, saved.get(k, 0.0), now.get(k, 0.0)) for k in keys if abs(saved.get(k, 0.0) - now.get(k, 0.0)) >= 1]
 byp = defaultdict(lambda: [0.0, 0.0, 0.0, 0])
 for k in keys:
