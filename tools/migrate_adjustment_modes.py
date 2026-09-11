@@ -66,7 +66,7 @@ def main():
                 print(f"    {name} {f['period_label']}: {float(amt):,.2f} уже в retro_adjustments")
                 continue
             res = add_adjustment(f["supplier_id"], f["period_label"], float(amt), f"{label} (перенесено из доп. выплаты факта)",
-                                 source="migration_fact_extra", created_by="migrate_adjustment_modes.py", apply=a.apply)
+                                 source="migration", created_by="migrate_adjustment_modes.py", apply=a.apply)
             print(f"    {name} {f['period_label']}: +{float(amt):,.2f} «{label}» -> {res}")
         if len(keep) != len(ap_list) and a.apply:
             sb._req(f"{sb.URL}/rest/v1/retro_payments_fact?id=eq.{f['id']}", {"additional_payments": keep},
@@ -108,7 +108,7 @@ def main():
             amt = dmp[0]["amount"]
             if abs(gap - amt) < 1:
                 print(f"      -> добавляю ДМП {amt:,.0f} separate: "
-                      f"{add_adjustment(slav, per, amt, 'ДМП', source='migration_excel_note', created_by='migrate_adjustment_modes.py', payment_mode='separate', apply=a.apply)}")
+                      f"{add_adjustment(slav, per, amt, 'ДМП', source='excel_note', created_by='migrate_adjustment_modes.py', payment_mode='separate', apply=a.apply)}")
             else:
                 print(f"      -> ДМП {amt:,.0f} в примечании, но разница Excel - админка {gap:,.0f} - решать вручную")
     if not a.apply:
