@@ -239,6 +239,7 @@ function renderNav() {
     `<button class="nav-btn ${k === currentTable ? 'active' : ''}" onclick="switchTable('${k}')">${v.label}</button>`
   ).join('');
   html += `<button class="nav-btn ${currentTable === '_reconciliation' ? 'active' : ''}" onclick="switchToReconciliation()" style="margin-left:12px;border-left:2px solid var(--accent)">💰 Факт оплат ретро</button>`;
+  html += `<button class="nav-btn ${currentTable === '_import' ? 'active' : ''}" onclick="switchToImport()">📥 Загрузка Excel</button>`;
   nav.innerHTML = html;
 }
 
@@ -268,6 +269,219 @@ async function switchToReconciliation() {
   document.getElementById('help-panel').style.display = 'none';
   renderReconciliationToolbar();
   await loadReconciliation();
+}
+
+// ═══════════ Загрузка Excel: черновик → подтверждение → запись пачкой → автосверка ═══════════
+// Всё идёт через локальный сервер core/admin_server.py (start_admin.bat), он же пишет журнал retro_fact_imports.
+let importDraft = null;
+
+async function apiFetch(path, opts = {}) {
+  const { data: { session } } = await sb.auth.getSession();
+  const headers = Object.assign({}, opts.headers || {}, { Authorization: 'Bearer ' + (session ? session.access_token : '') });
+  let resp;
+  try { resp = await fetch(path, Object.assign({}, opts, { headers })); }
+  catch (e) { throw new Error('Сервер админки не отвечает. Откройте админку через start_admin.bat.'); }
+  let body = {};
+  try { body = await resp.json(); } catch (e) { /* не JSON */ }
+  if (!resp.ok) throw new Error(body.error || ('HTTP ' + resp.status + ' — откройте админку через start_admin.bat'));
+  return body;
+}
+
+async function switchToImport() {
+  currentTable = '_import';
+  renderNav();
+  document.getElementById('info-box').innerHTML =
+    '<b>Загрузка Excel «Ретро Бонусы»</b> — файл разбирается в черновик, в базу ничего не пишется. ' +
+    'Новые ячейки без замечаний отмечены сами; конфликты с админкой и ручные строки — только вашей галочкой. ' +
+    'После «Записать отмеченные» сама запускается сверка с расчётом и поиск причин расхождений (BigQuery, эталоны, правила, примечания).';
+  document.getElementById('help-panel').style.display = 'none';
+  document.getElementById('toolbar').innerHTML = `
+    <input type="file" id="imp-file" accept=".xlsx" style="font-size:13px;color:var(--text)">
+    <button class="btn btn-primary" onclick="uploadRetroExcel()">Разобрать файл</button>
+    <button class="btn btn-ghost" onclick="runReconcileOnly()" title="Сверить факты с расчётом без загрузки файла">⟳ Пересверить</button>
+    <span class="count-badge" id="count-badge"></span>`;
+  const wrap = document.getElementById('table-wrap');
+  wrap.innerHTML = '<div class="loading">Выберите файл Excel и нажмите «Разобрать файл».</div>';
+  try { await apiFetch('/api/ping'); }
+  catch (e) { wrap.innerHTML = `<div class="loading" style="color:var(--red)">${escHtml(e.message)}</div>`; }
+}
+
+async function uploadRetroExcel() {
+  const f = document.getElementById('imp-file').files[0];
+  const wrap = document.getElementById('table-wrap');
+  if (!f) { toast('Выберите файл .xlsx', true); return; }
+  wrap.innerHTML = '<div class="loading">Разбираю файл и сравниваю с базой…</div>';
+  try {
+    importDraft = await apiFetch('/api/upload', { method: 'POST', body: f, headers: { 'X-Filename': encodeURIComponent(f.name) } });
+    renderImportDraft();
+  } catch (e) {
+    wrap.innerHTML = `<div class="loading" style="color:var(--red)">${escHtml(e.message)}</div>`;
+  }
+}
+
+function impTable(title, head, rowsHtml) {
+  return `<h3 style="margin:18px 0 8px;font-size:14px">${title}</h3>
+    <table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rowsHtml}</tbody></table>`;
+}
+
+function renderImportDraft() {
+  const d = importDraft;
+  const wrap = document.getElementById('table-wrap');
+  const ctrlOk = d.control.every(c => c.ok);
+  const newRows = d.rows.filter(r => r.kind === 'new').sort((a, b) => (a.period + a.supplier).localeCompare(b.period + b.supplier, 'uk'));
+  const confl = d.rows.filter(r => r.kind === 'conflict').sort((a, b) => (a.period + a.supplier).localeCompare(b.period + b.supplier, 'uk'));
+  const opNew = d.openings.filter(o => o.state !== 'same');
+  document.getElementById('count-badge').textContent = `новых ${newRows.length} · конфликтов ${confl.length} · совпадает ${d.same}`;
+
+  let h = `<div style="padding:12px 16px;background:var(--surface2);border-radius:8px;margin:12px 0;font-size:13px">
+    <div style="font-weight:600;font-size:14px">📄 ${escHtml(d.file)}</div>
+    <div style="color:var(--text2)">сохранён: ${escHtml(d.stored)} · sha256 ${escHtml(d.hash)}…</div>
+    <div style="margin-top:6px">Контрольные суммы «Общая сумма»: ${d.control.map(c =>
+      `<span style="color:${c.ok ? 'var(--green)' : 'var(--red)'};margin-right:10px">${c.ok ? '✓' : '✗'} ${escHtml(c.label)} ${fmt(c.total)}${c.ok ? '' : ' ≠ ' + fmt(c.rows)}</span>`).join('')}</div>
+    ${d.repeat ? `<div style="color:var(--orange);margin-top:6px">⚠ Этот же файл уже загружали ${escHtml((d.repeat.applied_at || '').slice(0, 16).replace('T', ' '))} (${escHtml(d.repeat.applied_by || '')}).</div>` : ''}
+    ${!ctrlOk ? `<div style="color:var(--red);margin-top:6px;font-weight:600">Суммы строк не сходятся с «Общая сумма» — запись запрещена. Проверьте файл.</div>` : ''}
+    ${d.unmapped.length ? `<div style="color:var(--red);margin-top:6px">Не записываются — имени нет в маппинге: ${d.unmapped.map(escHtml).join(', ')}. Добавьте в «Маппинг имен.xlsx» и load_name_map.py.</div>` : ''}
+    ${d.manual.length ? `<div style="color:var(--text2);margin-top:4px">Составные строки (месяцы не пишутся, сверяются группой): ${d.manual.map(escHtml).join(', ')}</div>` : ''}
+    ${d.skipped.length ? `<div style="color:var(--text2);margin-top:4px">Игнорируются по маппингу: ${d.skipped.length}</div>` : ''}
+  </div>`;
+
+  if (!newRows.length && !confl.length && !opNew.length) {
+    h += `<div class="loading">Новых данных нет — всё из файла уже есть в админке (совпадает ${d.same}).</div>`;
+  }
+  if (newRows.length) {
+    h += impTable(`Новые ячейки (${newRows.length}) — в админке пусто`,
+      ['', 'Ячейка', 'Строка Excel → поставщик', 'Период', 'Сумма', 'Дата оплаты', 'Замечания'],
+      newRows.map(r => `<tr>
+        <td><input type="checkbox" class="imp-chk" data-kind="new" data-cell="${escHtml(r.cell)}" ${r.default ? 'checked' : ''} onchange="updateImportTotals()"></td>
+        <td>${escHtml(r.cell)}</td>
+        <td>${escHtml(r.excel_name)} → <b>${escHtml(r.supplier)}</b></td>
+        <td>${escHtml(r.period)}</td>
+        <td style="text-align:right">${fmt(r.amount)}</td>
+        <td>${escHtml(r.payment_date || '')}</td>
+        <td style="color:var(--orange);font-size:12px">${escHtml([...(r.flags || []), ...(r.extra || []).map(x => 'в сумме: ' + x)].join('; '))}</td>
+      </tr>`).join(''));
+  }
+  if (confl.length) {
+    h += impTable(`Конфликты (${confl.length}) — в админке уже другая сумма. По умолчанию НЕ перезаписываются`,
+      ['', 'Ячейка', 'Поставщик', 'Период', 'В админке', 'В Excel', 'Разница'],
+      confl.map(r => `<tr>
+        <td><input type="checkbox" class="imp-chk" data-kind="conflict" data-cell="${escHtml(r.cell)}" onchange="updateImportTotals()"></td>
+        <td>${escHtml(r.cell)}</td>
+        <td>${escHtml(r.supplier)}</td>
+        <td>${escHtml(r.period)}</td>
+        <td style="text-align:right">${fmt(r.previous)}</td>
+        <td style="text-align:right">${fmt(r.amount)}</td>
+        <td style="text-align:right;color:${r.amount - r.previous < 0 ? 'var(--red)' : 'var(--green)'}">${(r.amount - r.previous > 0 ? '+' : '') + fmt(r.amount - r.previous)}</td>
+      </tr>`).join(''));
+  }
+  if (d.openings.length) {
+    h += `<h3 style="margin:18px 0 8px;font-size:14px">Бонусы на открытие магазинов: ${d.openings.length}, новых/изменённых ${opNew.length}</h3>
+      <label style="font-size:13px"><input type="checkbox" id="imp-openings" ${opNew.length ? 'checked' : 'disabled'} onchange="updateImportTotals()">
+      записать новые/изменённые (${opNew.map(o => escHtml(o.excel_name) + ' · ' + escHtml(o.store) + ' ' + fmt(o.amount)).join('; ') || '—'})</label>`;
+  }
+  h += `<div style="position:sticky;bottom:0;background:var(--surface);border-top:1px solid var(--border);padding:12px 0;margin-top:16px;display:flex;gap:12px;align-items:center">
+      <span id="imp-total" style="font-size:13px"></span>
+      <button class="btn btn-green" id="imp-apply" onclick="applyImportDraft()">Записать отмеченные</button>
+      <button class="btn btn-ghost" onclick="cancelImportDraft()">Отменить черновик</button>
+      <span id="imp-status" style="font-size:12px;color:var(--text2)"></span>
+    </div>`;
+  wrap.innerHTML = h;
+  updateImportTotals();
+}
+
+function importSelection() {
+  const pick = kind => [...document.querySelectorAll(`.imp-chk[data-kind="${kind}"]:checked`)].map(c => c.dataset.cell);
+  const op = document.getElementById('imp-openings');
+  const newCells = pick('new'), conflictCells = pick('conflict');
+  const sum = importDraft.rows.filter(r => (r.kind === 'new' && newCells.includes(r.cell)) ||
+                                            (r.kind === 'conflict' && conflictCells.includes(r.cell)))
+                              .reduce((s, r) => s + r.amount, 0);
+  const openings = !!(op && op.checked);
+  return { newCells, conflictCells, sum, openings, openingsN: openings ? importDraft.openings.filter(o => o.state !== 'same').length : 0 };
+}
+
+function updateImportTotals() {
+  if (!importDraft) return;
+  const s = importSelection();
+  const ctrlOk = importDraft.control.every(c => c.ok);
+  const btn = document.getElementById('imp-apply');
+  document.getElementById('imp-total').innerHTML =
+    `К записи: <b>${s.newCells.length}</b> новых` + (s.conflictCells.length ? ` + <b style="color:var(--orange)">${s.conflictCells.length}</b> перезапись` : '') +
+    ` на <b>${fmt(s.sum)} ₴</b>` + (s.openingsN ? ` · бонусов на открытие: ${s.openingsN}` : '');
+  if (btn) btn.disabled = !ctrlOk || (!s.newCells.length && !s.conflictCells.length && !s.openingsN);
+}
+
+async function applyImportDraft() {
+  const s = importSelection();
+  const msg = `Записать в админку из «${importDraft.file}»:\n\n` +
+    `• новых фактов: ${s.newCells.length}\n` +
+    (s.conflictCells.length ? `• ПЕРЕЗАПИСАТЬ внесённые в админке: ${s.conflictCells.length} (прежние суммы сохранятся)\n` : '') +
+    `• сумма: ${fmt(s.sum)} ₴\n` +
+    (s.openingsN ? `• бонусов на открытие магазинов: ${s.openingsN}\n` : '') +
+    `\nПосле записи запустится сверка и поиск причин расхождений.`;
+  if (!confirm(msg)) return;
+  const btn = document.getElementById('imp-apply');
+  btn.disabled = true;
+  try {
+    const res = await apiFetch(`/api/imports/${importDraft.import_id}/apply`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_cells: s.newCells, conflict_cells: s.conflictCells, openings: s.openings }) });
+    const a = res.applied;
+    toast(`✅ Записано фактов: ${a.written.facts}, бонусов: ${a.written.openings}`);
+    const dropped = a.dropped_changed_meanwhile.length ? ` Пропущено (изменились в админке, пока смотрели): ${a.dropped_changed_meanwhile.join(', ')}.` : '';
+    document.getElementById('table-wrap').innerHTML = `<div style="padding:16px;font-size:13px">
+      <div style="font-size:15px;font-weight:600;color:var(--green)">✅ Записано: фактов ${a.written.facts} на ${fmt(a.amount)} ₴, бонусов на открытие ${a.written.openings}.</div>
+      <div style="color:var(--orange)">${escHtml(dropped)}</div>
+      <div id="job-box" style="margin-top:12px"></div></div>`;
+    importDraft = null;
+    pollJob(res.job_id);
+  } catch (e) {
+    btn.disabled = false;
+    toast('Помилка: ' + e.message, true);
+  }
+}
+
+async function cancelImportDraft() {
+  if (!importDraft) return;
+  try { await apiFetch(`/api/imports/${importDraft.import_id}/cancel`, { method: 'POST' }); } catch (e) { /* черновик можно бросить */ }
+  importDraft = null;
+  switchToImport();
+}
+
+async function runReconcileOnly() {
+  if (!confirm('Пересверить факты с расчётом и заново найти причины расхождений? (2–4 минуты, в факты ничего не пишется)')) return;
+  try {
+    const res = await apiFetch('/api/reconcile', { method: 'POST' });
+    document.getElementById('table-wrap').innerHTML = '<div id="job-box" style="padding:16px"></div>';
+    pollJob(res.job_id);
+  } catch (e) { toast('Помилка: ' + e.message, true); }
+}
+
+async function pollJob(jobId) {
+  const box = document.getElementById('job-box');
+  if (!box) return;
+  try {
+    const j = await apiFetch(`/api/jobs/${jobId}`);
+    const tail = (j.log || []).filter(l => l.trim()).slice(-12).map(escHtml).join('\n');
+    if (j.status === 'running') {
+      box.innerHTML = `<div style="color:var(--text2)">⏳ Сверка и диагностика идут (BigQuery)…</div><pre style="font-size:11px;color:var(--text2);white-space:pre-wrap">${tail}</pre>`;
+      setTimeout(() => pollJob(jobId), 3000);
+    } else {
+      box.innerHTML = `<div style="font-weight:600;color:${j.status === 'done' ? 'var(--green)' : 'var(--red)'}">${j.status === 'done' ? '✅ Сверка завершена' : '✗ Сверка завершилась с ошибкой'}</div>
+        <pre style="font-size:11px;color:var(--text2);white-space:pre-wrap">${tail}</pre>
+        <button class="btn btn-primary" onclick="openReconProblems()">Открыть «Факт оплат ретро» → проблемы</button>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:var(--red)">${escHtml(e.message)}</div>`;
+  }
+}
+
+async function openReconProblems() {
+  reconFilter = 'recon_problems';
+  await switchToReconciliation();
+  const sel = document.getElementById('recon-filter');
+  if (sel) sel.value = 'recon_problems';
+  renderReconciliation();
 }
 
 function renderToolbar() {
@@ -431,7 +645,7 @@ function formatCell(val, col) {
   return escHtml(String(val));
 }
 
-function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escHtml(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 function filterData(data) {
   if (!searchTerm) return [...data];
@@ -740,10 +954,13 @@ function renderReconciliationToolbar() {
       <option value="with_diff">Только с расхождениями</option>
       <option value="unpaid">Только неоплаченные</option>
       <option value="zero_charged">Только с нулевым начислением</option>
+      <option value="recon_problems">⚠ Проблемы автосверки</option>
     </select>
     <button class="btn btn-ghost" onclick="loadReconciliation()">Обновить</button>
     <span class="count-badge" id="count-badge"></span>
   `;
+  const sel = document.getElementById('recon-filter');
+  if (sel) sel.value = reconFilter;
 }
 
 function onReconSearch(val) {
@@ -813,9 +1030,36 @@ async function loadReconciliation() {
     .map(id => ({ id, name: lookups.suppliers[id] || '???' }))
     .sort((a, b) => a.name.localeCompare(b.name, 'uk'));
 
-  reconData = { calcs: calcs || [], facts: facts || [], months, suppliers, baseTypeBySupplier };
+  // Результаты автосверки (core/reconcile_facts.py + диагностика) — только чтение
+  const { data: recon, error: e3 } = await sb.from('retro_reconciliation')
+    .select('supplier_id, period_label, status, diagnosis, delta, excel_amount, excel_cell, group_key, checked_at')
+    .range(0, 4999);
+  const reconMap = {};
+  (recon || []).forEach(r => { reconMap[r.supplier_id + '|' + r.period_label] = r; });
+  if (e3) console.warn('retro_reconciliation:', e3.message);
+
+  reconData = { calcs: calcs || [], facts: facts || [], months, suppliers, baseTypeBySupplier, reconMap };
   renderReconciliation();
 }
+
+// Статусы автосверки: quiet = не шумим бейджем, только подсказка
+const RECON_LABELS = {
+  MATCH:          { icon: '✓',  label: 'сходится',            color: 'var(--green)',  quiet: true },
+  MINOR:          { icon: '✓',  label: 'до 2%',               color: 'var(--green)',  quiet: true },
+  ZERO_OK:        { icon: '✓',  label: '0 = 0',               color: 'var(--text2)',  quiet: true },
+  REDISTRIBUTION: { icon: '↔',  label: 'разнесено по месяцам', color: 'var(--text2)' },
+  MISMATCH:       { icon: '❗', label: 'расхождение',          color: 'var(--red)' },
+  MANUAL:         { icon: '✋', label: 'ручной разбор',        color: 'var(--orange)' },
+  STALE_CALC:     { icon: '⟳',  label: 'пересчитать',          color: 'var(--orange)' },
+  PENDING:        { icon: '⏳', label: 'ждём оплату',          color: 'var(--text2)',  quiet: true },
+  NOT_PAID:       { icon: '🔴', label: 'не оплачено',          color: 'var(--red)' },
+  NOT_EXPECTED:   { icon: '🏦', label: 'безнал',               color: 'var(--text2)',  quiet: true },
+  EXCEL_ONLY:     { icon: '📄', label: 'внести из Excel',      color: 'var(--orange)' },
+  ZERO_BUT_CALC:  { icon: '⚠',  label: '0 при начислении',     color: 'var(--red)' },
+  FACT_NO_CALC:   { icon: '🟣', label: 'нет расчёта',          color: '#a78bfa' },
+  EXCLUDED_OWNER: { icon: '🔒', label: 'не сверяется',         color: 'var(--text2)',  quiet: true },
+};
+const RECON_PROBLEMS = new Set(['MISMATCH', 'MANUAL', 'STALE_CALC', 'NOT_PAID', 'EXCEL_ONLY', 'ZERO_BUT_CALC', 'FACT_NO_CALC']);
 
 function baseTypeIcon(baseType) {
   if (baseType === 'payments') return '<span title="Ретро від оплат" style="cursor:help">💳</span>';
@@ -852,6 +1096,9 @@ function renderReconciliation() {
     if (searchTerm && !s.name.toLowerCase().includes(searchTerm)) return false;
 
     if (reconFilter === 'all') return true;
+    if (reconFilter === 'recon_problems') {
+      return months.some(m => RECON_PROBLEMS.has(((reconData.reconMap || {})[s.id + '|' + m] || {}).status));
+    }
 
     // Считаем суммы по поставщику за все месяцы
     let totalCharged = 0, totalPaid = 0;
@@ -953,6 +1200,16 @@ function renderReconCell(supId, period, charged, factRow, calcEntry) {
     `Оплачено ${fmt(paid)}\nДата: ${factRow.date || '—'}\nДокумент: ${factRow.doc || '—'}\nЗаметки: ${factRow.notes || '—'}` :
     (charged > 0 ? `Не оплачено\nНачислено: ${fmt(charged)}` : 'Нет начислений');
 
+  const rc = (reconData.reconMap || {})[supId + '|' + period];
+  const rcInfo = rc ? (RECON_LABELS[rc.status] || { icon: '?', label: rc.status, color: 'var(--text2)' }) : null;
+  const fullTooltip = rc
+    ? `${tooltip}\n\nАвтосверка: ${rcInfo.label}${rc.group_key ? ' (группа: ' + rc.group_key + ')' : ''}` +
+      `${rc.diagnosis ? '\n' + rc.diagnosis : ''}\nпроверено ${(rc.checked_at || '').slice(0, 16).replace('T', ' ')}`
+    : tooltip;
+  const reconBadge = rc && !rcInfo.quiet
+    ? `<div style="font-size:10px;margin-top:2px;color:${rcInfo.color}">${rcInfo.icon} ${rcInfo.label}</div>`
+    : '';
+
   const lockBadge = isLocked
     ? `<div style="font-size:10px;color:${isPaid ? 'var(--green)' : '#a78bfa'};margin-top:2px">${isPaid ? '💚 оплачено' : '🔒 затверджено'}</div>`
     : '';
@@ -972,9 +1229,10 @@ function renderReconCell(supId, period, charged, factRow, calcEntry) {
   return `<td class="${isLocked ? '' : 'editable'}"
             style="text-align:right;padding:6px 10px;background:${isLocked ? 'rgba(167,139,250,0.05)' : status.bg}"
             ondblclick="${isLocked ? '' : `openReconCellModal('${supId}','${period}')`}"
-            title="${escHtml(tooltip)}">
+            title="${escHtml(fullTooltip)}">
     <div style="color:${status.color};font-weight:500">${fmt(paid)}</div>
     <div style="font-size:11px;color:var(--text2)">з ${fmt(charged)} ${status.icon}</div>
+    ${reconBadge}
     ${lockBadge}
     ${approveBtn}
     ${unlockBtn}
@@ -1065,6 +1323,16 @@ async function openReconCellModal(supId, period) {
       <div style="color:var(--text2);font-size:13px">Период: <b style="color:var(--text)">${period}</b></div>
       <div style="color:var(--text2);font-size:13px">Начислено: <b style="color:var(--accent)">${fmt(charged)} ₴</b></div>
     </div>
+    ${(() => {
+      const rc = (reconData.reconMap || {})[supId + '|' + period];
+      if (!rc) return '';
+      const info = RECON_LABELS[rc.status] || { icon: '?', label: rc.status, color: 'var(--text2)' };
+      return `<div style="padding:10px 12px;border-left:3px solid ${info.color};background:var(--surface2);border-radius:6px;margin-bottom:16px;font-size:12px">
+        <div style="font-weight:600;color:${info.color};margin-bottom:4px">${info.icon} Автосверка: ${escHtml(info.label)}${rc.group_key ? ' · группа ' + escHtml(rc.group_key) : ''}</div>
+        ${rc.diagnosis ? `<div style="color:var(--text);white-space:pre-wrap">${escHtml(rc.diagnosis).replace(/; /g, '\n')}</div>` : ''}
+        <div style="color:var(--text2);margin-top:4px">проверено ${escHtml((rc.checked_at || '').slice(0, 16).replace('T', ' '))}</div>
+      </div>`;
+    })()}
 
     <label>Оплачено, грн *</label>
     <input id="f_amount_paid" type="number" step="0.01" value="${factRow ? factRow.amount_paid : ''}" placeholder="0.00">

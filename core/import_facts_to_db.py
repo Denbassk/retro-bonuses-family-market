@@ -5,17 +5,20 @@ import_facts_to_db.py - ЭТАП 3: запись фактов оплат рет�
 Принцип: админка - источник истины для уже внесённого, Excel - для нового.
 По умолчанию пишутся ТОЛЬКО ячейки, которых нет в retro_payments_fact.
 Конфликты (суммы расходятся) показываются, но не перезаписываются - для них нужен
---with-conflicts, и прежнее значение сохраняется в amount_previous.
+--with-conflicts (или галочка в админке), и прежнее значение сохраняется в amount_previous.
 
-Не пишутся: is_ignored, составные (split_targets).
-Подозрительные даты не записываются, запись помечается needs_manual.
+Не пишутся: is_ignored, составные (split_targets) - их месячные ячейки.
+Бонусы на открытие магазина пишутся всегда (плательщик = имя строки Excel).
 
-Запуск:
-  python import_facts_to_db.py "Ретро Бонусы.xlsx" --sheet 2026
-  python import_facts_to_db.py "Ретро Бонусы.xlsx" --sheet 2026 --apply
-  python import_facts_to_db.py "Ретро Бонусы.xlsx" --sheet 2026 --with-conflicts --apply
+Код разделён: build_plan() - разбор без записи (его же использует сервер админки для черновика),
+apply_plan() - запись выбранных строк. CLI печатает план как раньше.
+
+Запуск (из корня):
+  python core\\import_facts_to_db.py "Ретро_Excel\\Ретро Бонусы 2026-09-11.xlsx" --sheet 2026
+  ... --apply
+  ... --with-conflicts --apply
 """
-import re, argparse, getpass
+import re, argparse
 from datetime import datetime, timezone
 from pathlib import Path
 from collections import defaultdict
@@ -40,37 +43,27 @@ def note_body(text):
     return DATE_RE.sub(" ", b).strip(" .,-—")
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("xlsx")
-    ap.add_argument("--sheet", default="2026")
-    ap.add_argument("--header-row", type=int, default=1)
-    ap.add_argument("--apply", action="store_true")
-    ap.add_argument("--with-conflicts", action="store_true",
-                    help="перезаписать суммы, уже внесённые в админке")
-    ap.add_argument("--skip-zero", action="store_true", help="не импортировать нулевые ячейки")
-    args = ap.parse_args()
-
-    path = Path(args.xlsx)
-    year = int(re.search(r"(20\d{2})", args.sheet).group(1))
-    ws = load_workbook(path, data_only=True)[args.sheet]
-    who = getpass.getuser()
+def build_plan(path, sheet="2026", header_row=1, skip_zero=False):
+    """Разбор Excel против текущей БД. Ничего не пишет. -> dict (см. ключи в return)."""
+    path = Path(path)
+    year = int(re.search(r"(20\d{2})", sheet).group(1))
+    ws = load_workbook(path, data_only=True)[sheet]
     now = datetime.now(timezone.utc).isoformat()
 
     cols = {}
     for c in range(2, ws.max_column + 1):
-        cl = classify_header(ws.cell(row=args.header_row, column=c).value, year)
+        cl = classify_header(ws.cell(row=header_row, column=c).value, year)
         if cl and cl[0] != "skip":
             cols[c] = cl
 
     cmts = {}
-    for r in range(args.header_row + 1, ws.max_row + 1):
+    for r in range(header_row + 1, ws.max_row + 1):
         for c in cols:
             cm = ws.cell(row=r, column=c).comment
             if cm and (cm.text or "").strip():
                 cmts[(r, c)] = cm.text
     if not cmts:
-        for ref, txt in comments_from_zip(path, args.sheet).items():
+        for ref, txt in comments_from_zip(path, sheet).items():
             m = re.match(r"([A-Z]+)(\d+)", ref)
             if m:
                 cmts[(int(m.group(2)), column_index_from_string(m.group(1)))] = txt
@@ -80,27 +73,39 @@ def main():
         "select=excel_name_normalized,supplier_id,is_ignored,split_targets,needs_manual")}
     sup = {s["id"]: s["name"] for s in sb.get("suppliers", "select=id,name")}
     existing = {(x["supplier_id"], x["period_label"]): float(x["amount_paid"])
-                for x in sb.get("retro_payments_fact",
-                                "select=supplier_id,period_label,amount_paid")}
+                for x in sb.get("retro_payments_fact", "select=supplier_id,period_label,amount_paid")}
+    ex_open = {(o["excel_name"], o["store_label"], o["year"]): float(o["amount"])
+               for o in sb.get("store_opening_bonuses", "select=excel_name,store_label,year,amount")}
 
-    def opening(sid, raw, label, amt, p):
-        """Бонус на открытие магазина -> store_opening_bonuses. Ключ: (excel_name, store_label, year)."""
-        return {"supplier_id": sid, "excel_name": raw, "store_label": label, "amount": amt, "year": year,
-                "payment_date": (p["payment_date"].isoformat()
-                                 if p["payment_date"] and not p["date_warning"] else None),
-                "source_file": path.name, "imported_at": now}
+    def opening(sid, raw, label, amt, p, cell):
+        prev = ex_open.get((raw, label, year))
+        return {"cell": cell, "state": "new" if prev is None else ("same" if abs(prev - amt) < EPS else "changed"),
+                "amount_previous": prev,
+                "rec": {"supplier_id": sid, "excel_name": raw, "store_label": label, "amount": amt, "year": year,
+                        "payment_date": (p["payment_date"].isoformat()
+                                         if p["payment_date"] and not p["date_warning"] else None),
+                        "source_file": path.name, "imported_at": now}}
 
     new, conflict, same, openings = [], [], 0, []
     skipped, manual, unmapped, zeros, lost_openings = [], [], set(), 0, []
+    totals, sums = {}, defaultdict(float)
 
-    for r in range(args.header_row + 1, ws.max_row + 1):
+    for r in range(header_row + 1, ws.max_row + 1):
         raw = ws.cell(row=r, column=1).value
         if raw is None or not str(raw).strip():
             continue
         raw = str(raw).strip()
         nm = norm_name(raw)
         if nm in STOP_NAMES:
+            for c, (kind, label) in cols.items():
+                a = parse_amount(ws.cell(row=r, column=c).value)
+                if a is not None:
+                    totals[label] = a
             continue
+        for c, (kind, label) in cols.items():
+            a = parse_amount(ws.cell(row=r, column=c).value)
+            if a is not None:
+                sums[label] += a
 
         mp = nmap.get(nm)
         if not mp:
@@ -113,9 +118,10 @@ def main():
             for c, (kind, label) in cols.items():
                 a = parse_amount(ws.cell(row=r, column=c).value)
                 if kind == "one_off" and a is not None:
+                    cell = f"{get_column_letter(c)}{r}"
                     pn = parse_note(cmts.get((r, c), ""), None, fallback_year=year)
-                    openings.append(opening(None, raw, label, a, pn))
-                    lost_openings.append((f"{get_column_letter(c)}{r}", raw, label, a))
+                    openings.append(opening(None, raw, label, a, pn, cell))
+                    lost_openings.append((cell, raw, label, a))
             if mp.get("is_ignored"):
                 skipped.append(raw)
             else:
@@ -130,7 +136,7 @@ def main():
             amt = parse_amount(ws.cell(row=r, column=c).value)
             if amt is None:
                 continue
-            if amt == 0 and args.skip_zero:
+            if amt == 0 and skip_zero:
                 zeros += 1
                 continue
             cell = f"{get_column_letter(c)}{r}"
@@ -139,7 +145,7 @@ def main():
             body = note_body(txt)
 
             if kind == "one_off":
-                openings.append(opening(sid, raw, label, amt, p))
+                openings.append(opening(sid, raw, label, amt, p, cell))
                 continue
 
             flags = []
@@ -168,7 +174,7 @@ def main():
                 if other and (any(w in body.lower() for w in ADJ_WORDS) or rng):
                     covers = [f"{year}-{m:02d}" for m in other]
                 if len(comps) >= 2 and abs(sum(x["amount"] for x in comps) - amt) > 5:
-                    flags.append(f"состав примечания != суммы ячейки")
+                    flags.append("состав примечания != суммы ячейки")
 
             rec = {"supplier_id": sid, "period_label": label, "amount_paid": amt,
                    "payment_date": (p["payment_date"].isoformat()
@@ -186,26 +192,66 @@ def main():
                 rec["amount_previous"] = prev
                 conflict.append((cell, raw, rec, flags))
 
-    print(f"[i] Новых к записи: {len(new)} | совпадает: {same} | конфликтов: {len(conflict)}")
-    print(f"    разовых бонусов: {len(openings)} | ignore: {len(skipped)} | "
-          f"составных: {len(manual)} | без маппинга: {len(unmapped)}"
-          + (f" | нулей пропущено: {zeros}" if args.skip_zero else ""))
+    control = [{"label": k, "total": v, "rows": round(sums.get(k, 0.0), 2), "ok": abs(sums.get(k, 0.0) - v) < 1}
+               for k, v in sorted(totals.items())]
+    return {"file": path.name, "sheet": sheet, "year": year, "sup": sup,
+            "new": new, "conflict": conflict, "same": same, "openings": openings,
+            "skipped": skipped, "manual": manual, "unmapped": sorted(unmapped), "zeros": zeros,
+            "lost_openings": lost_openings, "control": control}
+
+
+def apply_plan(plan, new_cells=None, conflict_cells=None, openings=True):
+    """Запись выбранного. new_cells/conflict_cells - множества адресов ячеек (None = все новые / ни одного конфликта)."""
+    batch = [x[2] for x in plan["new"] if new_cells is None or x[0] in new_cells]
+    batch += [x[2] for x in plan["conflict"] if conflict_cells and x[0] in conflict_cells]
+    written = {"facts": 0, "openings": 0}
+    if batch:
+        sb.upsert("retro_payments_fact", batch, on_conflict="supplier_id,period_label")
+        written["facts"] = len(batch)
+    ops = [o["rec"] for o in plan["openings"] if openings and o["state"] != "same"]
+    if ops:
+        sb.upsert("store_opening_bonuses", ops, on_conflict="excel_name,store_label,year")
+        written["openings"] = len(ops)
+    return written
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("xlsx")
+    ap.add_argument("--sheet", default="2026")
+    ap.add_argument("--header-row", type=int, default=1)
+    ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--with-conflicts", action="store_true", help="перезаписать суммы, уже внесённые в админке")
+    ap.add_argument("--skip-zero", action="store_true", help="не импортировать нулевые ячейки")
+    args = ap.parse_args()
+
+    plan = build_plan(args.xlsx, args.sheet, args.header_row, args.skip_zero)
+    sup, new, conflict, openings = plan["sup"], plan["new"], plan["conflict"], plan["openings"]
+
+    bad = [c for c in plan["control"] if not c["ok"]]
+    print("[i] Контрольные суммы («Общая сумма»): " + ("все сошлись" if not bad else
+          "НЕ СОШЛИСЬ: " + ", ".join(f"{c['label']} итог {c['total']:,.0f} / строки {c['rows']:,.0f}" for c in bad)))
+    print(f"[i] Новых к записи: {len(new)} | совпадает: {plan['same']} | конфликтов: {len(conflict)}")
+    print(f"    разовых бонусов: {len(openings)} | ignore: {len(plan['skipped'])} | "
+          f"составных: {len(plan['manual'])} | без маппинга: {len(plan['unmapped'])}"
+          + (f" | нулей пропущено: {plan['zeros']}" if args.skip_zero else ""))
 
     if openings:
         byl = defaultdict(float)
         for o in openings:
-            byl[o["store_label"]] += o["amount"]
+            byl[o["rec"]["store_label"]] += o["rec"]["amount"]
         print("[i] Бонусы на открытие магазинов (сверить с «Общая сумма»): "
-              + ", ".join(f"{k} {v:,.0f}" for k, v in sorted(byl.items())))
-    if lost_openings:
-        print(f"[i] из них без поставщика, плательщик = строка Excel ({len(lost_openings)} шт на "
-              f"{sum(x[3] for x in lost_openings):,.0f}):")
-        for cell, raw, label, a in lost_openings:
+              + ", ".join(f"{k} {v:,.0f}" for k, v in sorted(byl.items()))
+              + f" | новых/изменённых: {sum(1 for o in openings if o['state'] != 'same')}")
+    if plan["lost_openings"]:
+        print(f"[i] из них без поставщика, плательщик = строка Excel ({len(plan['lost_openings'])} шт на "
+              f"{sum(x[3] for x in plan['lost_openings']):,.0f}):")
+        for cell, raw, label, a in plan["lost_openings"]:
             print(f"    {cell:<6} {raw[:30]:<30} {label:<14} {a:>10,.0f}")
 
-    if unmapped:
+    if plan["unmapped"]:
         print("\n[!] Нет в retro_fact_name_map:")
-        for x in sorted(unmapped):
+        for x in plan["unmapped"]:
             print(f"    {x}")
 
     byp = defaultdict(list)
@@ -228,8 +274,7 @@ def main():
             d = rec["amount_paid"] - rec["amount_previous"]
             tag = "перераспределение?" if abs(agg[rec["supplier_id"]]) < 0.5 else "РАСХОЖДЕНИЕ"
             print(f"    {cell:<6} {raw[:24]:<24} {rec['period_label']}  "
-                  f"{rec['amount_previous']:>10,.0f} -> {rec['amount_paid']:>10,.0f} "
-                  f"({d:>+9,.0f})  {tag}")
+                  f"{rec['amount_previous']:>10,.0f} -> {rec['amount_paid']:>10,.0f} ({d:>+9,.0f})  {tag}")
 
     flagged = [x for x in new if x[3]]
     if flagged:
@@ -237,34 +282,15 @@ def main():
         for cell, raw, rec, fl in flagged:
             print(f"    {cell:<6} {raw[:24]:<24} {rec['period_label']}  {'; '.join(fl)}")
 
-    cov = [x for x in new if x[2]["covers_periods"]]
-    if cov:
-        print(f"\n[i] Платежи за несколько периодов ({len(cov)}):")
-        for cell, raw, rec, fl in cov:
-            print(f"    {cell:<6} {raw[:24]:<24} {rec['period_label']} "
-                  f"+ {', '.join(rec['covers_periods'])}")
-
-    ex = [x for x in new if x[2]["additional_payments"]]
-    if ex:
-        print(f"\n[i] Нефакторные компоненты ({len(ex)}):")
-        for cell, raw, rec, fl in ex:
-            s = ", ".join(f"{a['amount']:,.0f} {a['label']}" for a in rec["additional_payments"])
-            print(f"    {cell:<6} {raw[:24]:<24} {rec['period_label']}  {s}")
-
     if not args.apply:
         print("\n[i] Пробный прогон. Для записи добавьте --apply")
         return
-
-    batch = [x[2] for x in new]
-    if args.with_conflicts:
-        batch += [x[2] for x in conflict]
-        print(f"\n[!] Режим --with-conflicts: перезаписываю {len(conflict)} записей")
-    if batch:
-        sb.upsert("retro_payments_fact", batch, on_conflict="supplier_id,period_label")
-        print(f"[>] retro_payments_fact: записано {len(batch)}")
-    if openings:
-        sb.upsert("store_opening_bonuses", openings, on_conflict="excel_name,store_label,year")
-        print(f"[>] store_opening_bonuses: записано {len(openings)}")
+    if bad:
+        print("\n[!] Контрольные суммы не сошлись - запись отменена")
+        return
+    w = apply_plan(plan, new_cells=None,
+                   conflict_cells={x[0] for x in conflict} if args.with_conflicts else None)
+    print(f"[>] retro_payments_fact: записано {w['facts']} | store_opening_bonuses: {w['openings']}")
 
 
 if __name__ == "__main__":

@@ -4,9 +4,9 @@ echo ========================================
 echo   Admin Panel - Family Market
 echo ========================================
 echo.
-echo Starting on http://localhost:3000 ...
+echo Starting on http://localhost:3000/admin.html (only this computer)
 echo.
-
-cd /d "D:\РЕТРО_БОНУСЫ Фэмэли маркет"
+cd /d "%~dp0"
 start "" /min cmd /c "timeout /t 2 >nul & start http://localhost:3000/admin.html"
-python -m http.server 3000
+python core\admin_server.py
+pause

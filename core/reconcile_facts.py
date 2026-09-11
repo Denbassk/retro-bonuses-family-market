@@ -154,6 +154,7 @@ def main():
     ap.add_argument("--from", dest="per_from", default="2026-01")
     ap.add_argument("--to", dest="per_to", default=None, help="по умолчанию - последний закрытый месяц")
     ap.add_argument("--no-bq", action="store_true")
+    ap.add_argument("--no-diagnose", action="store_true", help="не запускать диагностику после записи")
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()
     per_to = a.per_to or last_closed()
@@ -374,6 +375,13 @@ def main():
     sb._req(f"{sb.URL}/rest/v1/retro_reconciliation?period_label=gte.{a.per_from}&period_label=lte.{per_to}"
             f"&run_id=neq.{run_id}", None, "DELETE", {"Prefer": "return=minimal"})
     print(f"[>] retro_reconciliation: записано {len(batch)} (run {run_id[:8]})")
+
+    if not a.no_diagnose:
+        import diagnose_retro   # импорт здесь: diagnose_retro сам импортирует этот модуль
+        print("\n[i] Этап 5: диагностика проблемных пар (BigQuery, эталоны, правила, примечания)...")
+        res = diagnose_retro.run(apply=True, no_bq=a.no_bq, verbose=False)
+        closed = sum(1 for _, r in res if r["closed"])
+        print(f"[i] объяснено полностью {closed} из {sum(1 for _, r in res if r['closed'] is not None)} расхождений")
 
 
 if __name__ == "__main__":
