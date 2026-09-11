@@ -58,3 +58,5 @@ retro_facts_*.csv
 name_review_*.csv
 
 note_components_*.csv
+
+facts_coverage_*.csv
