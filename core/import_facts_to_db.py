@@ -84,7 +84,7 @@ def main():
                                 "select=supplier_id,period_label,amount_paid")}
 
     new, conflict, same, openings = [], [], 0, []
-    skipped, manual, unmapped, zeros = [], [], set(), 0
+    skipped, manual, unmapped, zeros, lost_openings = [], [], set(), 0, []
 
     for r in range(args.header_row + 1, ws.max_row + 1):
         raw = ws.cell(row=r, column=1).value
@@ -99,11 +99,16 @@ def main():
         if not mp:
             unmapped.add(raw)
             continue
-        if mp.get("is_ignored"):
-            skipped.append(raw)
-            continue
-        if mp.get("split_targets"):
-            manual.append((raw, "составной платёж"))
+        if mp.get("is_ignored") or mp.get("split_targets"):
+            # разовые бонусы в такой строке не теряем молча: без однозначного поставщика не пишем, но показываем
+            for c, (kind, label) in cols.items():
+                a = parse_amount(ws.cell(row=r, column=c).value)
+                if kind == "one_off" and a:
+                    lost_openings.append((f"{get_column_letter(c)}{r}", raw, label, a))
+            if mp.get("is_ignored"):
+                skipped.append(raw)
+            else:
+                manual.append((raw, "составной платёж"))
             continue
         sid = mp.get("supplier_id")
         if not sid:
@@ -125,7 +130,7 @@ def main():
             if kind == "one_off":
                 openings.append({
                     "supplier_id": sid, "store_label": label, "amount": amt, "year": year,
-                    "payment_date": p["payment_date"].isoformat() if p["payment_date"] else None,
+                    # колонки payment_date в store_opening_bonuses нет (PGRST204 при записи 11.09)
                     "source_file": path.name, "imported_at": now})
                 continue
 
@@ -177,6 +182,12 @@ def main():
     print(f"    разовых бонусов: {len(openings)} | ignore: {len(skipped)} | "
           f"составных: {len(manual)} | без маппинга: {len(unmapped)}"
           + (f" | нулей пропущено: {zeros}" if args.skip_zero else ""))
+
+    if lost_openings:
+        print(f"\n[!] Разовые бонусы в составных/ignore строках — НЕ записаны, нужен поставщик "
+              f"({len(lost_openings)} шт на {sum(x[3] for x in lost_openings):,.0f}):")
+        for cell, raw, label, a in lost_openings:
+            print(f"    {cell:<6} {raw[:30]:<30} {label:<14} {a:>10,.0f}")
 
     if unmapped:
         print("\n[!] Нет в retro_fact_name_map:")
