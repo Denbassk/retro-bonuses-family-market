@@ -1035,11 +1035,12 @@ async function openReconCellModal(supId, period) {
   let extrasHtml = '';
   if (calcId) {
     const { data: extras } = await sb.from('retro_calculation_details')
-      .select('id, retro_amount, notes')
+      .select('id, retro_amount, notes, adjustment_id')
       .eq('calculation_id', calcId)
       .eq('applied_percent', 0)
       .neq('retro_amount', 0)
-      .is('retro_rule_id', null);
+      .is('retro_rule_id', null)
+      .not('adjustment_id', 'is', null);   // только ручные доплаты; фикс-бонус создаёт расчёт
 
     if (extras && extras.length) {
       extras.forEach(e => {
@@ -1047,7 +1048,7 @@ async function openReconCellModal(supId, period) {
           padding:4px 8px;background:rgba(52,211,153,0.08);border-radius:4px;margin-bottom:3px;font-size:12px">
           <span style="color:var(--text2)">${escHtml(e.notes || '—')}</span>
           <div style="display:flex;align-items:center;gap:8px">
-            <span style="color:var(--green);font-weight:600">+${fmt(e.retro_amount)} ₴</span>
+            <span style="color:${e.retro_amount < 0 ? 'var(--red)' : 'var(--green)'};font-weight:600">${e.retro_amount > 0 ? '+' : ''}${fmt(e.retro_amount)} ₴</span>
             <button onclick="deleteExtraPayment('${e.id}', ${e.retro_amount}, '${calcId}')"
               style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:0 2px;line-height:1"
               title="Видалити">✕</button>
@@ -1105,15 +1106,34 @@ async function addExtraPayment(calcId) {
   const amount = parseFloat(document.getElementById('f_extra_amount').value);
   const notes = document.getElementById('f_extra_notes').value || '';
 
-  if (isNaN(amount) || amount <= 0) { toast('Введіть коректну суму', true); return; }
+  if (isNaN(amount) || amount === 0) { toast('Введіть суму (мінус = вирахування)', true); return; }
   if (!notes.trim()) { toast('Введіть примітку', true); return; }
+  const calcRow = reconData.calcs.find(c => c.id === calcId);
+  if (!calcRow) { toast('Розрахунок не знайдено', true); return; }
+  if (!confirm(`${amount > 0 ? 'Додати доплату' : 'Додати вирахування'} ${fmt(amount)} ₴ за ${calcRow.period_label}\n«${notes.trim()}»?`)) return;
 
   // Берём supplier_brand_id из существующих деталей
   const { data: existingDetail } = await sb.from('retro_calculation_details')
     .select('supplier_brand_id').eq('calculation_id', calcId).limit(1);
   const brandId = existingDetail && existingDetail.length ? existingDetail[0].supplier_brand_id : null;
 
+  // 1) Постоянная запись в retro_adjustments — переживает пересчёт (calculate_retro воссоздаёт строку)
+  const { data: { user } } = await sb.auth.getUser();
+  const { data: adj, error: e0 } = await sb.from('retro_adjustments').insert({
+    supplier_id: calcRow.supplier_id,
+    supplier_brand_id: brandId,
+    period_label: calcRow.period_label,
+    amount: amount,
+    bonus_form: 'price_correction',
+    notes: notes.trim(),
+    source: 'admin',
+    created_by: user ? user.email : null,
+  }).select('id').single();
+  if (e0) { toast('Помилка: ' + e0.message, true); return; }
+
+  // 2) Строка в текущем расчёте, связанная с доплатой
   const { error: e1 } = await sb.from('retro_calculation_details').insert({
+    adjustment_id: adj.id,
     calculation_id: calcId,
     supplier_brand_id: brandId,
     applied_percent: 0,
@@ -1123,14 +1143,18 @@ async function addExtraPayment(calcId) {
     retro_amount: amount,
     retro_amount_vat: amount,
     bonus_form: 'price_correction',
-    notes: notes,
+    notes: notes.trim(),
   });
-  if (e1) { toast('Помилка: ' + e1.message, true); return; }
+  if (e1) {
+    await sb.from('retro_adjustments').delete().eq('id', adj.id);   // откат: без строки расчёта доплата не нужна
+    toast('Помилка: ' + e1.message, true);
+    return;
+  }
 
-  // Обновляем total_retro
+  // 3) Обновляем total_retro
   const { data: calc } = await sb.from('retro_calculations')
     .select('total_retro').eq('id', calcId).single();
-  const newTotal = (parseFloat(calc.total_retro) || 0) + amount;
+  const newTotal = Math.round(((parseFloat(calc.total_retro) || 0) + amount) * 100) / 100;
   await sb.from('retro_calculations').update({ total_retro: newTotal }).eq('id', calcId);
 
   toast('✅ Доп. виплату додано');
@@ -1148,13 +1172,20 @@ async function addExtraPayment(calcId) {
 async function deleteExtraPayment(detailId, amount, calcId) {
   if (!confirm('Видалити доп. виплату?')) return;
 
+  const { data: det } = await sb.from('retro_calculation_details')
+    .select('adjustment_id').eq('id', detailId).single();
   const { error } = await sb.from('retro_calculation_details').delete().eq('id', detailId);
   if (error) { toast('Помилка: ' + error.message, true); return; }
+  // Удаляем и постоянную запись, иначе пересчёт вернёт доплату
+  if (det && det.adjustment_id) {
+    const { error: e2 } = await sb.from('retro_adjustments').delete().eq('id', det.adjustment_id);
+    if (e2) { toast('Строку удалено, но retro_adjustments: ' + e2.message, true); }
+  }
 
-  // Зменшуємо total_retro
+  // Зменшуємо total_retro (вычет может быть отрицательным — без обрезки нулём)
   const { data: calc } = await sb.from('retro_calculations')
     .select('total_retro').eq('id', calcId).single();
-  const newTotal = Math.max(0, (parseFloat(calc.total_retro) || 0) - parseFloat(amount));
+  const newTotal = (parseFloat(calc.total_retro) || 0) - parseFloat(amount);
   await sb.from('retro_calculations').update({ total_retro: Math.round(newTotal * 100) / 100 }).eq('id', calcId);
 
   toast('✅ Доп. виплату видалено');
@@ -1178,6 +1209,12 @@ async function saveReconFact(supId, period, factId) {
     notes: document.getElementById('f_notes').value || null,
     updated_at: new Date().toISOString(),
   };
+  // Изменение уже внесённой суммы — только с подтверждением, прежнее значение сохраняем
+  const prevFact = (factId && factId !== 'null') ? reconData.facts.find(f => f.id === factId) : null;
+  if (prevFact && Math.abs((parseFloat(prevFact.amount_paid) || 0) - amount) >= 0.005) {
+    if (!confirm(`Змінити факт оплати за ${period}:\n${fmt(prevFact.amount_paid)} → ${fmt(amount)} ₴?`)) return;
+    payload.amount_previous = parseFloat(prevFact.amount_paid);
+  }
 
   let result;
   if (factId && factId !== 'null') {

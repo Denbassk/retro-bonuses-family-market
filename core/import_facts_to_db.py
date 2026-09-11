@@ -83,6 +83,13 @@ def main():
                 for x in sb.get("retro_payments_fact",
                                 "select=supplier_id,period_label,amount_paid")}
 
+    def opening(sid, raw, label, amt, p):
+        """Бонус на открытие магазина -> store_opening_bonuses. Ключ: (excel_name, store_label, year)."""
+        return {"supplier_id": sid, "excel_name": raw, "store_label": label, "amount": amt, "year": year,
+                "payment_date": (p["payment_date"].isoformat()
+                                 if p["payment_date"] and not p["date_warning"] else None),
+                "source_file": path.name, "imported_at": now}
+
     new, conflict, same, openings = [], [], 0, []
     skipped, manual, unmapped, zeros, lost_openings = [], [], set(), 0, []
 
@@ -100,10 +107,14 @@ def main():
             unmapped.add(raw)
             continue
         if mp.get("is_ignored") or mp.get("split_targets"):
-            # разовые бонусы в такой строке не теряем молча: без однозначного поставщика не пишем, но показываем
+            # Бонус на открытие магазина (колонка = адрес ТТ) платит компания из строки Excel.
+            # Плательщик = имя строки (решение 11.09: «Бир Компани (Славутич пиво)»), supplier_id пустой -
+            # поставщика не угадываем. Месячные ячейки таких строк не пишутся.
             for c, (kind, label) in cols.items():
                 a = parse_amount(ws.cell(row=r, column=c).value)
-                if kind == "one_off" and a:
+                if kind == "one_off" and a is not None:
+                    pn = parse_note(cmts.get((r, c), ""), None, fallback_year=year)
+                    openings.append(opening(None, raw, label, a, pn))
                     lost_openings.append((f"{get_column_letter(c)}{r}", raw, label, a))
             if mp.get("is_ignored"):
                 skipped.append(raw)
@@ -128,10 +139,7 @@ def main():
             body = note_body(txt)
 
             if kind == "one_off":
-                openings.append({
-                    "supplier_id": sid, "store_label": label, "amount": amt, "year": year,
-                    # колонки payment_date в store_opening_bonuses нет (PGRST204 при записи 11.09)
-                    "source_file": path.name, "imported_at": now})
+                openings.append(opening(sid, raw, label, amt, p))
                 continue
 
             flags = []
@@ -183,9 +191,15 @@ def main():
           f"составных: {len(manual)} | без маппинга: {len(unmapped)}"
           + (f" | нулей пропущено: {zeros}" if args.skip_zero else ""))
 
+    if openings:
+        byl = defaultdict(float)
+        for o in openings:
+            byl[o["store_label"]] += o["amount"]
+        print("[i] Бонусы на открытие магазинов (сверить с «Общая сумма»): "
+              + ", ".join(f"{k} {v:,.0f}" for k, v in sorted(byl.items())))
     if lost_openings:
-        print(f"\n[!] Разовые бонусы в составных/ignore строках — НЕ записаны, нужен поставщик "
-              f"({len(lost_openings)} шт на {sum(x[3] for x in lost_openings):,.0f}):")
+        print(f"[i] из них без поставщика, плательщик = строка Excel ({len(lost_openings)} шт на "
+              f"{sum(x[3] for x in lost_openings):,.0f}):")
         for cell, raw, label, a in lost_openings:
             print(f"    {cell:<6} {raw[:30]:<30} {label:<14} {a:>10,.0f}")
 
@@ -249,7 +263,7 @@ def main():
         sb.upsert("retro_payments_fact", batch, on_conflict="supplier_id,period_label")
         print(f"[>] retro_payments_fact: записано {len(batch)}")
     if openings:
-        sb.upsert("store_opening_bonuses", openings, on_conflict="supplier_id,store_label,year")
+        sb.upsert("store_opening_bonuses", openings, on_conflict="excel_name,store_label,year")
         print(f"[>] store_opening_bonuses: записано {len(openings)}")
 
 

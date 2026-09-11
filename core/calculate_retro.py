@@ -1145,6 +1145,14 @@ def save_to_supabase(all_results, months, supplier_rules):
                 print(f"  [skip] {sup_name} {month} — статус {locked_status}, пропускаємо")
                 continue
 
+            # Ручные доплаты/вычеты живут в retro_adjustments и воссоздаются при каждом сохранении.
+            # Грузим ДО удаления старого расчёта: если запрос упадёт, старые данные останутся.
+            adjs = sb_get("retro_adjustments",
+                          f"supplier_id=eq.{sup_id}&period_label=eq.{month}"
+                          "&select=id,supplier_brand_id,amount,bonus_form,notes")
+            if not isinstance(adjs, list):
+                raise RuntimeError(f"retro_adjustments недоступна ({adjs}) — сохранение остановлено, старый расчёт не тронут")
+
             for o in old:
                 sb_delete("retro_calculation_sku_details", f"calculation_id=eq.{o['id']}")
                 sb_delete("retro_calculation_details", f"calculation_id=eq.{o['id']}")
@@ -1155,6 +1163,7 @@ def save_to_supabase(all_results, months, supplier_rules):
             total_returns = sum(d.get("returns", 0) for d in details)
             total_base = sum(d.get("base", 0) for d in details)
             total_retro = sup_result.get("total", 0)
+            total_retro = round(float(total_retro) + sum(float(a["amount"]) for a in adjs), 2)
 
             calc = sb_post("retro_calculations", {
                 "period_start": period_start,
@@ -1207,6 +1216,16 @@ def save_to_supabase(all_results, months, supplier_rules):
                         saved_skus += 1
                     except Exception as e:
                         print(f"  [!] Ошибка сохранения SKU {sku.get('barcode')}: {e}")
+
+            for a in adjs:
+                sb_post("retro_calculation_details", {
+                    "calculation_id": calc_id, "supplier_brand_id": a.get("supplier_brand_id"),
+                    "retro_rule_id": None, "amount_purchased": 0, "amount_returned": 0, "amount_net": 0,
+                    "applied_percent": 0, "retro_amount": float(a["amount"]), "retro_amount_vat": float(a["amount"]),
+                    "bonus_form": a.get("bonus_form") or "price_correction", "notes": a["notes"],
+                    "adjustment_id": a["id"],
+                })
+                saved_details += 1
 
     print(f"  Записано: {saved_calcs} calculations, {saved_details} details, {saved_skus} SKU-строк")
 # ─── Аудит: бренды без начислений ────────────────────────────────────────────
