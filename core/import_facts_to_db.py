@@ -31,7 +31,8 @@ from parse_payment_notes import parse_note, AUTHOR_RE, DATE_RE, EARMARK_RE
 from parse_note_components import components, month_refs, ADJ_WORDS
 from dump_cell_comments import comments_from_zip
 
-NON_RETRO = ("дмп", "кубы", "кубі", "куби", "стойки", "стойка", "сгущёнка", "сгущенка")
+# не ретро в примечании ячейки. «Сгущёнка» сюда НЕ входит: у Юрії это ретро 15% по отдельному правилу (решение 11.09)
+NON_RETRO = ("дмп", "кубы", "кубі", "куби", "стойки", "стойка")
 RANGE_RE = re.compile(r"\b([а-яіїєґ]{3,})\s*[-—]\s*([а-яіїєґ]{3,})\b", re.IGNORECASE)
 SRC = "excel_retro_sheet"
 EPS = 1.0  # Excel округлён до гривны: разница < 1 ₴ = совпадение
@@ -41,6 +42,63 @@ def note_body(text):
     b = AUTHOR_RE.sub("", re.sub(r"\s+", " ", text or "").strip())
     b = EARMARK_RE.sub(" ", b)
     return DATE_RE.sub(" ", b).strip(" .,-—")
+
+
+SPREAD_MAX_MONTHS = 6
+
+
+def find_spread(rows, xl, existing, month_labels, sup):
+    """Ручная разноска. Поставщик принёс деньги за 2-3 месяца одной суммой, в Excel она стоит в одном месяце,
+    а в админке разнесена по месяцам. По месяцам это «недоплата + переплата», нарастающим итогом - ноль.
+    Такой блок - не конфликт: админка права, делать ничего не нужно.
+    Блок = подряд идущие месяцы, начинается с месяца, где Excel != админка, и закрывается, когда
+    накопленная разница вернулась к нулю (допуск 1 ₴ + копейки админки - Excel округлён до гривны).
+    Реальные мелкие разницы (Прометал -68/+65 = -3 ₴) блоком НЕ считаются и остаются конфликтами.
+    Пустая ячейка Excel и отсутствие факта в админке = 0."""
+    out = []
+    for sid in sorted({x[2]["supplier_id"] for x in rows}, key=lambda s: sup.get(s, "")):
+        cells = xl.get(sid, {})
+        d = []
+        for m in month_labels:
+            x = cells[m][1] if m in cells else 0.0
+            a = existing.get((sid, m))
+            d.append((m, x, a, x - (a or 0.0)))
+        for i, hit in spread_blocks(d):
+            blk = d[i:hit + 1]
+            out.append({
+                "supplier_id": sid, "supplier": sup.get(sid, "?"),
+                "months": [b[0] for b in blk],
+                "excel_total": round(sum(b[1] for b in blk), 2),
+                "admin_total": round(sum(b[2] or 0.0 for b in blk), 2),
+                "cells": [{"period": b[0], "cell": cells[b[0]][0] if b[0] in cells else None,
+                           "excel": cells[b[0]][1] if b[0] in cells else None, "admin": b[2]} for b in blk],
+                "notes": [note_body(cells[b[0]][2]) for b in blk
+                          if b[0] in cells and note_body(cells[b[0]][2])],
+            })
+    return out
+
+
+def spread_blocks(d):
+    """d = [(месяц, excel, админка|None, excel - админка)] по порядку -> [(i, j)] закрытых блоков ручной разноски."""
+    out, i = [], 0
+    while i < len(d):
+        if abs(d[i][3]) < EPS:
+            i += 1
+            continue
+        cum, tol, hit = 0.0, EPS, None
+        for j in range(i, min(i + SPREAD_MAX_MONTHS, len(d))):
+            cum += d[j][3]
+            tol += abs((d[j][2] or 0.0) - round(d[j][2] or 0.0))  # копейки админки против целых гривен Excel
+            signs = {v[3] > 0 for v in d[i:j + 1] if abs(v[3]) >= EPS}
+            if len(signs) == 2 and abs(cum) <= tol:
+                hit = j  # есть и «недоплата», и «переплата», а в сумме ноль
+                break
+        if hit is None:
+            i += 1
+            continue
+        out.append((i, hit))
+        i = hit + 1
+    return out
 
 
 def build_plan(path, sheet="2026", header_row=1, skip_zero=False):
@@ -89,6 +147,8 @@ def build_plan(path, sheet="2026", header_row=1, skip_zero=False):
     new, conflict, same, openings = [], [], 0, []
     skipped, manual, unmapped, zeros, lost_openings = [], [], set(), 0, []
     totals, sums = {}, defaultdict(float)
+    xl = {}  # sid -> {period: (cell, amount, note)} - все месячные ячейки, включая совпадающие
+    month_labels = sorted({label for kind, label in cols.values() if kind == "month"})
 
     for r in range(header_row + 1, ws.max_row + 1):
         raw = ws.cell(row=r, column=1).value
@@ -183,6 +243,7 @@ def build_plan(path, sheet="2026", header_row=1, skip_zero=False):
                    "imported_at": now, "needs_manual": bool(flags), "amount_previous": None,
                    "covers_periods": covers or None, "additional_payments": extra}
 
+            xl.setdefault(sid, {})[label] = (cell, amt, txt)
             prev = existing.get((sid, label))
             if prev is None:
                 new.append((cell, raw, rec, flags))
@@ -192,10 +253,15 @@ def build_plan(path, sheet="2026", header_row=1, skip_zero=False):
                 rec["amount_previous"] = prev
                 conflict.append((cell, raw, rec, flags))
 
+    spread = find_spread(new + conflict, xl, existing, month_labels, sup)
+    drop = {c["cell"] for b in spread for c in b["cells"] if c["cell"]}
+    new = [x for x in new if x[0] not in drop]
+    conflict = [x for x in conflict if x[0] not in drop]
+
     control = [{"label": k, "total": v, "rows": round(sums.get(k, 0.0), 2), "ok": abs(sums.get(k, 0.0) - v) < 1}
                for k, v in sorted(totals.items())]
     return {"file": path.name, "sheet": sheet, "year": year, "sup": sup,
-            "new": new, "conflict": conflict, "same": same, "openings": openings,
+            "new": new, "conflict": conflict, "same": same, "openings": openings, "spread": spread,
             "skipped": skipped, "manual": manual, "unmapped": sorted(unmapped), "zeros": zeros,
             "lost_openings": lost_openings, "control": control}
 
@@ -231,7 +297,8 @@ def main():
     bad = [c for c in plan["control"] if not c["ok"]]
     print("[i] Контрольные суммы («Общая сумма»): " + ("все сошлись" if not bad else
           "НЕ СОШЛИСЬ: " + ", ".join(f"{c['label']} итог {c['total']:,.0f} / строки {c['rows']:,.0f}" for c in bad)))
-    print(f"[i] Новых к записи: {len(new)} | совпадает: {plan['same']} | конфликтов: {len(conflict)}")
+    print(f"[i] Новых к записи: {len(new)} | совпадает: {plan['same']} | конфликтов: {len(conflict)}"
+          f" | разнесено вручную (итог сходится): {sum(len(b['cells']) for b in plan['spread'])} мес. в {len(plan['spread'])} блоках")
     print(f"    разовых бонусов: {len(openings)} | ignore: {len(plan['skipped'])} | "
           f"составных: {len(plan['manual'])} | без маппинга: {len(plan['unmapped'])}"
           + (f" | нулей пропущено: {plan['zeros']}" if args.skip_zero else ""))
@@ -248,6 +315,13 @@ def main():
               f"{sum(x[3] for x in plan['lost_openings']):,.0f}):")
         for cell, raw, label, a in plan["lost_openings"]:
             print(f"    {cell:<6} {raw[:30]:<30} {label:<14} {a:>10,.0f}")
+
+    if plan["spread"]:
+        print(f"\n[=] Разнесено вручную по месяцам - итог Excel = итог админки, НЕ конфликты ({len(plan['spread'])}):")
+        for b in plan["spread"]:
+            print(f"    {b['supplier'][:34]:<34} {b['months'][0]}..{b['months'][-1]}  "
+                  f"Excel {b['excel_total']:>11,.0f} = админка {b['admin_total']:>11,.0f}"
+                  + (f"  | {' / '.join(b['notes'])[:60]}" if b["notes"] else ""))
 
     if plan["unmapped"]:
         print("\n[!] Нет в retro_fact_name_map:")

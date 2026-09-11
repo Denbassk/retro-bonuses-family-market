@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sb
 from paths import ROOT, EXCEL_DIR
-from import_facts_to_db import build_plan, apply_plan
+from import_facts_to_db import build_plan, apply_plan, note_body
 
 HOST, PORT = "127.0.0.1", int(os.environ.get("ADMIN_PORT", "3000"))
 STATIC = {"/admin.html": ROOT / "admin.html"}
@@ -61,15 +61,17 @@ def plan_to_json(plan):
             rows.append({
                 "cell": cell, "kind": kind, "excel_name": raw, "supplier": sup.get(rec["supplier_id"], "?"),
                 "period": rec["period_label"], "amount": rec["amount_paid"], "previous": rec.get("amount_previous"),
-                "payment_date": rec.get("payment_date"), "flags": flags,
+                "payment_date": rec.get("payment_date"), "flags": flags, "note": note_body(rec.get("notes") or ""),
                 "extra": [f"{e['amount']:,.0f} {e['label']}".replace(",", " ") for e in rec.get("additional_payments") or []],
                 "default": kind == "new" and not flags})
     openings = [{"cell": o["cell"], "excel_name": o["rec"]["excel_name"], "store": o["rec"]["store_label"],
                  "amount": o["rec"]["amount"], "state": o["state"], "previous": o["amount_previous"],
                  "supplier": sup.get(o["rec"]["supplier_id"]) if o["rec"]["supplier_id"] else None}
                 for o in plan["openings"]]
+    spread = [{k: b[k] for k in ("supplier", "months", "excel_total", "admin_total", "cells", "notes")}
+              for b in plan.get("spread") or []]
     return {"file": plan["file"], "control": plan["control"], "same": plan["same"], "rows": rows,
-            "openings": openings, "unmapped": plan["unmapped"], "skipped": plan["skipped"],
+            "openings": openings, "spread": spread, "unmapped": plan["unmapped"], "skipped": plan["skipped"],
             "manual": [m[0] for m in plan["manual"]]}
 
 
@@ -202,6 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                       "&order=applied_at.desc&limit=1")
         summary = {"new": sum(1 for r in pj["rows"] if r["kind"] == "new"),
                    "conflict": sum(1 for r in pj["rows"] if r["kind"] == "conflict"), "same": pj["same"],
+                   "spread": len(pj["spread"]),
                    "openings_new": sum(1 for o in pj["openings"] if o["state"] != "same"),
                    "control_ok": all(c["ok"] for c in pj["control"]), "unmapped": pj["unmapped"]}
         row = sb.upsert("retro_fact_imports", [{"file_name": name, "stored_path": str(path.relative_to(ROOT)),

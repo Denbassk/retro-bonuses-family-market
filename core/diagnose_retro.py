@@ -39,6 +39,7 @@ from import_facts_to_db import note_body, NON_RETRO
 from parse_note_components import components
 from dump_cell_comments import comments_from_zip
 from reconcile_facts import newest_excel, month_add, TOL_ABS, TOL_PCT
+import bq_docs
 
 TARGET = ("MISMATCH", "MANUAL", "STALE_CALC", "NOT_PAID", "EXCEL_ONLY", "ZERO_BUT_CALC", "FACT_NO_CALC")
 CLOSE_PCT = 0.005            # остаток <= 0,5% расчёта (не меньше 1 ₴) = разрыв закрыт
@@ -155,6 +156,12 @@ class Data:
 
         self.load_excel()
         self.bq = {} if no_bq else self.load_bq(targets, wide)
+        # документы BQ против эталона Торгсофт (недогруз / задвоение / другая сумма / сдвиг даты)
+        self.docs = None
+        if not no_bq:
+            names = {n for t in targets for s in t["members"] for n in self.aliases[s]["in"] | self.aliases[s]["ret"]}
+            if names:
+                self.docs = bq_docs.load_all(pers[0], pers[-1], names)
 
     def load_excel(self):
         self.xlsx = newest_excel()
@@ -279,16 +286,23 @@ def h_note(D, t, ctx):
         return []
     got = sum(c["amount"] for _, c in non)
     extra = sum(f2(d["retro_amount"]) for d in ctx["extras"])
+    sep = t.get("separate") or 0.0      # «заплачено отдельно»: нет ни в факте, ни в расчёте - разницу не объясняет
     parts = ", ".join(f"{c['amount']:,.0f} {c['label']}" for _, c in non)
     txt = f"в примечании {non[0][0]}: {parts} - это не ретро"
     if extra:
         txt += f"; доплатами в расчёт уже внесено {extra:,.0f}"
-    return [cand("NOTE", got - extra, txt)] if abs(got - extra) >= TOL_ABS else []
+    if sep:
+        txt += f"; отдельно (вне «Оплачено») внесено {sep:,.0f}"
+    rest = got - extra - sep
+    return [cand("NOTE", rest, txt)] if abs(rest) >= TOL_ABS else []
 
 
 def h_excel(D, t, ctx):
     X, F, C = t.get("excel_amount"), t.get("fact"), t.get("calc")
-    if X is None or F is None or C is None or abs(X - F) < TOL_ABS:
+    if X is None or F is None or C is None or t.get("spread"):
+        return []
+    X -= t.get("separate") or 0.0       # в Excel общая сумма, отдельные доплаты в админке вне «Оплачено»
+    if abs(X - F) < TOL_ABS:
         return []
     if abs(X - C) <= max(TOL_ABS, CLOSE_PCT * abs(C)):
         return [cand("EXCEL", F - X, f"в админке внесено {F:,.0f}, в Excel {t['excel_cell']} = {X:,.0f} - Excel сходится "
@@ -460,6 +474,71 @@ def h_etalon(D, t, ctx):
     return out
 
 
+def h_data(D, t, ctx):
+    """Документы BigQuery против эталона Торгсофт: недогруз, задвоение, другая сумма документа, сдвиг даты.
+    Ретро = (база эталона - наша база) × ставка поставщика × доля его прихода, покрытая правилами.
+    Кандидаты: весь разрыв данных целиком и по каждому типу отдельно (лестница выберет закрывающий)."""
+    if D.docs is None:
+        return h_etalon(D, t, ctx)
+    if not ctx["ship"]:
+        return []
+    out, per = [], t["per"]
+    for s in t["members"]:
+        mine = [d for d in ctx["ship"] if d["_sid"] == s]
+        if not mine:
+            continue
+        name = D.sup.get(s, "?")
+        r_s = sum(f2(d["retro_amount"]) for d in mine) / (sum(f2(d["amount_net"]) for d in mine) or 1)
+        ours = D.bq_sum("inc", s, per) + D.bq_sum("raw", s, per)
+        covered = sum(f2(d["amount_purchased"]) for d in mine)
+        share = min(1.0, covered / ours) if ours else 1.0
+        subtract = any((d["_rule"].get("returns_policy") or "") == "subtract" for d in mine)
+        for kind, sign, what in (("inc", 1, "приходы"), ("ret", -1, "возвраты")):
+            if kind == "ret" and not subtract:
+                continue
+            events, et_last = D.docs[kind][0], D.docs[kind][1]
+            if not et_last or per > et_last:
+                continue
+            summ = bq_docs.summarize(events, per, D.aliases[s]["ret" if kind == "ret" else "in"])
+            summ = {typ: x for typ, x in summ.items() if typ not in bq_docs.NOT_OURS}
+            k = sign * share * r_s
+            total = sum(x["delta"] for x in summ.values())
+            if abs(total * k) < TOL_ABS:
+                continue
+            code = "DATA_" + kind.upper()
+            out.append(cand(code, total * k, f"{name}: {bq_docs.describe(summ, what + ' против эталона')} "
+                                             f"-> {money(total * k)} ретро"))
+            if len(summ) > 1:
+                for typ, x in summ.items():
+                    if abs(x["delta"] * k) >= TOL_ABS:
+                        out.append(cand(f"{code}_{typ.upper()}", x["delta"] * k,
+                                        f"{name}: {bq_docs.describe({typ: x}, what + ' против эталона')} "
+                                        f"-> {money(x['delta'] * k)} ретро"))
+    return out
+
+
+def data_line(D, t):
+    """Строка «данные:» для каждой проблемной пары - даже если разрыв объяснён другим."""
+    if D.docs is None:
+        return None
+    per, parts, checked = t["per"], [], False
+    for s in t["members"]:
+        for kind, what in (("inc", "приходы"), ("ret", "возвраты")):
+            events, et_last = D.docs[kind][0], D.docs[kind][1]
+            names = D.aliases[s]["ret" if kind == "ret" else "in"]
+            if not names or not et_last or per > et_last:
+                continue
+            checked = True
+            txt = bq_docs.describe(bq_docs.summarize(events, per, names), what)
+            if txt:
+                parts.append((f"{D.sup.get(s)} " if len(t["members"]) > 1 else "") + txt)
+    if parts:
+        return "данные BigQuery против эталона Торгсофт за " + per + ": " + " / ".join(parts)
+    if checked:
+        return f"данные: приходы и возвраты за {per} совпадают с эталоном Торгсофт по документам (недогруза и дублей нет)"
+    return f"данные: эталона за {per} ещё нет - полнота загрузки не проверена"
+
+
 def h_ref(D, t, ctx):
     """income_source=torgsoft_ref: расчёт взял приход из эталона; поставщик мог считать от наших приходов."""
     if not D.bq:
@@ -565,7 +644,7 @@ def missing_data(D, t, ctx):
 
 
 # ───────────────────────────── лестница ─────────────────────────────
-LADDER = [h_note, h_excel, h_shift, h_threshold, h_vat, h_rate_xls, h_returns, h_sku, h_etalon, h_ref, h_payments]
+LADDER = [h_note, h_excel, h_shift, h_threshold, h_vat, h_rate_xls, h_returns, h_sku, h_data, h_ref, h_payments]
 
 
 def diagnose(D, t):
@@ -630,6 +709,9 @@ def diagnose(D, t):
         lines.insert(0, head)
     else:
         closed = None
+    dl = data_line(D, t)
+    if dl:
+        lines.append(dl)
     return {"text": sp("; ".join(lines)), "closed": closed, "residual": residual,
             "causes": [{"code": c["code"], "amount": c["amount"], "text": c["text"]} for c in accepted],
             "checked": [{"code": c["code"], "amount": c["amount"]} for c in checked if c["amount"]]}
@@ -657,7 +739,8 @@ def build_targets(recon_all, supplier=None, period=None, names=None):
         out.append({"members": members, "per": per, "status": r0["status"], "rows": rows, "label": label,
                     "fact": fact, "calc": calc, "delta": f2(r0["delta"]) if r0.get("delta") is not None else None,
                     "excel_amount": f2(r0["excel_amount"]) if r0.get("excel_amount") is not None else None,
-                    "excel_cell": r0.get("excel_cell")})
+                    "excel_cell": r0.get("excel_cell"),
+                    "separate": f2(dd.get("separate_extras")), "spread": dd.get("manual_spread")})
     return sorted(out, key=lambda t: (t["per"], t["label"]))
 
 

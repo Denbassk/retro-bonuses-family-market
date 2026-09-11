@@ -30,6 +30,7 @@ from paths import OUT, EXCEL_DIR
 import sb
 from openpyxl import load_workbook
 from import_retro_facts import norm_name, parse_amount, classify_header, STOP_NAMES
+from import_facts_to_db import spread_blocks
 
 TRUTH_UNTIL = "2026-06"
 LAG_MONTHS = 2
@@ -184,6 +185,11 @@ def main():
 
     xlsx = Path(a.xlsx) if a.xlsx else newest_excel()
     excel = load_excel(xlsx, a.sheet, nmap, name2id) if xlsx else {}
+    # доплаты «заплачено отдельно» (ДМП Славутич): в «Оплачено» и в расчёт не входят, но в Excel сумма общая
+    separate = defaultdict(float)
+    for adj in sb.get("retro_adjustments", f"period_label=gte.{a.per_from}&period_label=lte.{per_to}&select=*"):
+        if (adj.get("payment_mode") or "in_payment") == "separate":
+            separate[(adj["supplier_id"], adj["period_label"])] += float(adj["amount"] or 0)
 
     # ── свежесть расчёта (только незакрытые для «истины» месяцы) ──
     fresh_from = month_add(TRUTH_UNTIL, 1)
@@ -201,6 +207,18 @@ def main():
 
     for key in keys:
         names = " + ".join(sup.get(s, "?") for s in key)
+        # ручная разноска: Excel и админка по месяцам разные, нарастающим итогом равны (как в черновике загрузки)
+        seq = []
+        for per in pers:
+            fr = [f for s in key for f in facts.get((s, per), [])]
+            sp_ = sum(separate.get((s, per), 0.0) for s in key)
+            adm = sum(float(f["amount_paid"]) for f in fr) + sp_ if fr or sp_ else None
+            xa = excel.get((key, per), (None, ""))[0]
+            seq.append((per, xa or 0.0, adm, (xa or 0.0) - (adm or 0.0)))
+        spread = {}
+        for i, j in spread_blocks(seq):
+            for p_ in pers[i:j + 1]:
+                spread[p_] = f"{pers[i]}..{pers[j]}"
         for per in pers:
             frows = [f for s in key for f in facts.get((s, per), [])]
             crows = [c for s in key for c in calcs.get((s, per), [])]
@@ -243,9 +261,17 @@ def main():
                 st = "MISMATCH"
 
             # пометки, не меняющие статус
-            if ex_amt is not None and fact is not None and abs(ex_amt - fact) >= TOL_ABS:
-                diag.append(f"в Excel {ex_cell} = {money(ex_amt)}, в админке {money(fact)}")
-                dd["excel_vs_admin"] = round(ex_amt - fact, 2)
+            sep = round(sum(separate.get((s, per), 0.0) for s in key), 2)
+            if sep:
+                dd["separate_extras"] = sep
+            if ex_amt is not None and fact is not None and abs(ex_amt - fact - sep) >= TOL_ABS:
+                if per in spread:
+                    diag.append(f"Excel и админка разнесены по месяцам по-разному, итог за {spread[per]} совпадает")
+                    dd["manual_spread"] = spread[per]
+                else:
+                    diag.append(f"в Excel {ex_cell} = {money(ex_amt)}, в админке {money(fact)}"
+                                + (f" + отдельно {money(sep)}" if sep else ""))
+                    dd["excel_vs_admin"] = round(ex_amt - fact - sep, 2)
             y, m = int(per[:4]), int(per[5:])
             for f in frows:
                 pdt = f.get("payment_date")
@@ -382,6 +408,10 @@ def main():
         res = diagnose_retro.run(apply=True, no_bq=a.no_bq, verbose=False)
         closed = sum(1 for _, r in res if r["closed"])
         print(f"[i] объяснено полностью {closed} из {sum(1 for _, r in res if r['closed'] is not None)} расхождений")
+        if not a.no_bq:
+            import bq_docs
+            print("\n[i] Полнота базы: документы BigQuery против эталона Торгсофт (все поставщики)...")
+            bq_docs.health(a.per_from, per_to)
 
 
 if __name__ == "__main__":

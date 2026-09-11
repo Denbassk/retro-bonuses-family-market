@@ -1149,9 +1149,11 @@ def save_to_supabase(all_results, months, supplier_rules):
             # Грузим ДО удаления старого расчёта: если запрос упадёт, старые данные останутся.
             adjs = sb_get("retro_adjustments",
                           f"supplier_id=eq.{sup_id}&period_label=eq.{month}"
-                          "&select=id,supplier_brand_id,amount,bonus_form,notes")
+                          "&select=*")
             if not isinstance(adjs, list):
                 raise RuntimeError(f"retro_adjustments недоступна ({adjs}) — сохранение остановлено, старый расчёт не тронут")
+            # «заплачено отдельно» (ДМП Славутич) в начисление не входит - только in_payment
+            adjs = [a for a in adjs if (a.get("payment_mode") or "in_payment") == "in_payment"]
 
             for o in old:
                 sb_delete("retro_calculation_sku_details", f"calculation_id=eq.{o['id']}")

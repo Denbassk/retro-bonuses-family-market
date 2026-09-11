@@ -165,16 +165,22 @@
 D:\РЕТРО_БОНУСЫ Фэмэли маркет
 ├── CLAUDE.md, State.md       # память проекта и архитектура
 ├── admin.html                # админка (остаётся в корне: её раздаёт start_admin.bat)
-├── start_admin.bat           # http://localhost:3000/admin.html
+├── start_admin.bat           # core\admin_server.py -> http://localhost:3000/admin.html (только этот ПК)
 ├── menu_retro.bat, run_retro.bat  # интерактивное меню расчёта (ярлык «Расчет_ретро» -> run_retro.bat)
 ├── core\                     # рабочий конвейер: запускать из корня, python core\<скрипт>.py
 │   ├── sb.py, paths.py       # доступ к Supabase (пагинация, батчи), единые пути
-│   ├── calculate_retro.py    # расчёт ретро
+│   ├── calculate_retro.py    # расчёт ретро (+ доплаты in_payment из retro_adjustments)
 │   ├── import_payments.py    # банковские выписки -> supplier_payments
 │   ├── import_retro_facts.py, dump_cell_comments.py, parse_payment_notes.py, parse_note_components.py  # разбор Excel
 │   ├── resolve_supplier_names.py, load_name_map.py, confirm_names.py   # маппинг имён
-│   ├── import_facts_to_db.py # Excel -> retro_payments_fact
-│   └── audit_facts_coverage.py, diagnose_retro.py, dump_rules.py
+│   ├── import_facts_to_db.py # Excel -> черновик (новые / конфликты / ручная разноска) -> retro_payments_fact
+│   ├── admin_server.py       # сервер админки: загрузка Excel, запись с журналом, фоновая сверка
+│   ├── adjustments.py        # доплаты «не ретро»: in_payment / separate
+│   ├── reconcile_facts.py    # ЭТАП 4: факт vs расчёт -> retro_reconciliation (+ диагностика + полнота базы)
+│   ├── diagnose_retro.py     # ЭТАП 5: лестница гипотез с числами, строка «данные» у каждой пары
+│   ├── bq_docs.py            # документы BigQuery против эталона Торгсофт: недогруз / дубли / сумма / дата
+│   └── audit_facts_coverage.py, dump_rules.py
+├── sql\                      # миграции Supabase (выполняет пользователь в SQL Editor)
 ├── tools\                    # разовые миграции/заливки справочников, шаблоны, Apps Script
 ├── analysis\                 # разборы по конкретным поставщикам (СТВ, Монжар, Союз, зерновая)
 ├── _archive\                 # probe-скрипты и их CSV (сверка слоя данных и т.п.)
