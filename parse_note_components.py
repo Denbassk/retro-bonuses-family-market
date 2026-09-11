@@ -92,7 +92,13 @@ def main():
         refs = month_refs(body)
         is_adj = any(w in body.lower() for w in ADJ_WORDS)
         cell_amt = float(r["amount"]) if r["amount"] else None
-        csum = sum(c["amount"] for c in money) if money else None
+        has_total = (cell_amt is not None and
+                     any(abs(c["amount"] - cell_amt) <= 0.01 for c in money))
+        if has_total:
+            money = [c for c in money if abs(c["amount"] - cell_amt) > 0.01]
+            csum = cell_amt
+        else:
+            csum = sum(c["amount"] for c in money) if money else None
         delta = (csum - cell_amt) if (csum is not None and cell_amt is not None) else None
 
         own = None
@@ -101,7 +107,7 @@ def main():
             own = int(m.group(2))
         other = sorted(refs - ({own} if own else set()))
 
-        looks_full = len(money) >= 2 and not body.lstrip().startswith("+")
+        looks_full = (has_total or len(money) >= 2) and not body.lstrip().startswith("+")
         if looks_full and delta is not None:
             kind = "FULL_OK" if abs(delta) <= args.tol else "MISMATCH"
         elif money:
@@ -161,3 +167,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
