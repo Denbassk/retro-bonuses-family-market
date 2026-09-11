@@ -205,3 +205,48 @@ Excel держит доплату в месяце фактического пл�
 расхождения «наша база vs эталон» на уровне поставщик×месяц: если сумма по
 `incoming_transactions` с фильтрами != эталон, значит потерян алиас, склад или тип документа.
 Каталог таблиц снимается скриптом `bq_catalog.py`.
+
+
+## Эталоны BigQuery (каталог снят, 81 таблица)
+
+**Эталон приходов:** `torgsoft_incoming_ref_2026` — 58 217 строк, документный уровень.
+Колонки: row_key, doc_date, doc_number, amount, currency, comment, supplier, store, amount_retail.
+Только 2026. Сумма закупки — в `amount` (не amount_purchase, как в детальной).
+
+**Эталон возвратов:** `torgsoft_outgoing_ref` — 8 205 строк, все годы.
+Колонки: row_key, doc_date, doc_datetime, doc_number, store, supplier, company, currency,
+amount_purchase, amount_national, amount_currency, amount_retail_fixed, amount_retail_now,
+changed_by, **is_prosrok**, **is_internal**, source_file.
+Флаги is_internal/is_prosrok в нашей `outgoing_to_supplier_transactions` отсутствуют —
+возможно, во «возвраты поставщику» затесались внутренние перемещения и просрочка.
+
+**Эталон продаж:** `torgsoft_sales_ref` — 1 765 568 строк. Уже используется
+для правил с `income_source=torgsoft_ref` (Арсенал ПК Шейк).
+
+**Ключевое ограничение: в эталонах нет barcode.** Сверка возможна только по полному
+обороту поставщик×месяц без SKU-фильтров. Назначение — контроль СЛОЯ ДАННЫХ
+(потерянный документ / алиас / склад), а не слоя правил.
+Сверка — `reconcile_vs_etalon.py`, каталог — `bq_catalog.py` / `bq_catalog.csv`.
+
+**Разница уровней:** эталон приходов документный (58 тыс.), наша `incoming_transactions`
+построчная (1 035 095). Возвраты: эталон 8 205 док. против 47 115 строк.
+Сравнивать только агрегаты и `COUNT(DISTINCT doc_number)`.
+
+### Прочие справочники BQ, полезные проекту
+
+- `supplier_mapping` (156) incoming_supplier → matrix_supplier — готовый источник
+  недостающих алиасов, сейчас проектом не используется.
+- `supplier_aliases` (14) — **своя таблица алиасов в BQ**, отдельная от одноимённой
+  в Supabase. Два независимых источника алиасов, риск расхождения.
+- `supplier_conditions` (105) — старый срез условий (retro_percent_min/max, retro_text,
+  sponsor_fee, returns_percent...). **Третий источник истины по процентам** помимо
+  retro_rules и Excel. Для сверки ставок пригодится, как рабочий — нет.
+- `store_canon` (49) / `store_mapping` (43) — канонизация магазинов, нужна для
+  исключения складов (актуально для правила Маршалл Табако по покрытию ТТ).
+- `turnover_monthly` (1 343 668) — остатки/продажи по barcode×store×месяц,
+  на ней считается покрытие ТТ для Маршалл Табако.
+- Шум: ~20 таблиц вида *_backup_*, *_bak_*, transfer_pack_v5/v6 — в расчёте не участвуют.
+
+## Отложено сознательно
+
+- Союз (Оболонь), отсутствие алиасов — по решению пользователя не трогаем.

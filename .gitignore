@@ -62,3 +62,7 @@ note_components_*.csv
 facts_coverage_*.csv
 
 rules_snapshot.*
+
+bq_catalog.csv
+etalon_incoming_*.csv
+etalon_returns_*.csv
