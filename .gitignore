@@ -52,3 +52,5 @@ zerno_skus.json
 desktop.ini
 *.ico
 *.lnk
+
+retro_facts_*.csv
