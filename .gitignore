@@ -1,0 +1,54 @@
+# Данные и коммерческая информация
+*.xlsx
+*.xls
+*.csv
+payments/
+output/
+Коммерческие_условия_поставщиков_2026.html
+
+# Секреты
+.env
+.env.*
+credentials/
+*.pem
+*.key
+token.json
+
+# Мусор
+__pycache__/
+*.pyc
+.venv/
+venv/
+Бэкап/
+*.bak
+*.bak_*
+*.lnk
+~$*
+*.log
+*.sqlite
+*.db
+.vscode/
+.idea/
+Thumbs.db
+
+# Логи и выгрузки прогонов
+analysis_*.txt
+check_*.txt
+Штрих-коды*.txt
+zerno_skus.json
+
+# Системный мусор Windows
+desktop.ini
+*.ico
+*.lnk
+
+# Логи и выгрузки прогонов
+analysis_*.txt
+check_*.txt
+Штрих-коды*.txt
+zerno_skus.json
+
+# Системный мусор Windows
+desktop.ini
+*.ico
+*.lnk

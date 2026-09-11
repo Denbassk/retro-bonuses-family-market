@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ретро-Бонуси — Адмін-панель</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #232733;
+  --border: #2e3345;
+  --text: #e4e6ed;
+  --text2: #8b8fa3;
+  --accent: #4f8ff7;
+  --accent2: #3a6fd8;
+  --green: #34d399;
+  --red: #f87171;
+  --orange: #fbbf24;
+  --row-hover: #252a38;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
+.header h1 { font-size: 18px; font-weight: 600; }
+.header .subtitle { color: var(--text2); font-size: 13px; }
+
+.nav { display: flex; gap: 4px; padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.nav-btn { padding: 8px 16px; border: 1px solid var(--border); background: transparent; color: var(--text2); border-radius: 6px; cursor: pointer; font-size: 13px; transition: all .2s; }
+.nav-btn:hover { background: var(--surface2); color: var(--text); }
+.nav-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.info-box { margin: 16px 24px 0; padding: 14px 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; line-height: 1.6; color: var(--text2); }
+.info-box b { color: var(--text); }
+
+.toolbar { display: flex; gap: 8px; padding: 12px 24px; align-items: center; flex-wrap: wrap; }
+.toolbar input { padding: 7px 12px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); border-radius: 6px; font-size: 13px; width: 260px; }
+.toolbar input::placeholder { color: var(--text2); }
+.btn { padding: 7px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all .2s; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent2); }
+.btn-green { background: #059669; color: #fff; }
+.btn-green:hover { background: #047857; }
+.btn-red { background: #dc2626; color: #fff; }
+.btn-red:hover { background: #b91c1c; }
+.btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text2); }
+.btn-ghost:hover { background: var(--surface2); color: var(--text); }
+.count-badge { color: var(--text2); font-size: 13px; margin-left: auto; }
+
+.table-wrap { padding: 0 24px 24px; overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 230px); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th { background: var(--surface2); color: var(--text2); font-weight: 600; text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--border); position: sticky; top: 0; white-space: nowrap; cursor: pointer; user-select: none; z-index: 10; }
+thead th:hover { color: var(--text); }
+thead th .sort-arrow { margin-left: 4px; font-size: 10px; }
+tbody tr { border-bottom: 1px solid var(--border); }
+tbody tr:hover { background: var(--row-hover); }
+tbody td { padding: 6px 10px; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
+tbody td.editable { cursor: pointer; }
+tbody td.editable:hover { background: rgba(79,143,247,0.08); }
+td.wrap { white-space: normal; max-width: 350px; }
+td .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+td .tag-green { background: rgba(52,211,153,0.15); color: var(--green); }
+td .tag-red { background: rgba(248,113,113,0.15); color: var(--red); }
+td .tag-orange { background: rgba(251,191,36,0.15); color: var(--orange); }
+td .tag-blue { background: rgba(79,143,247,0.15); color: var(--accent); }
+
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; justify-content: center; align-items: flex-start; padding-top: 60px; }
+.modal-overlay.show { display: flex; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; width: 600px; max-width: 95vw; max-height: 80vh; overflow-y: auto; padding: 24px; }
+.modal h2 { font-size: 16px; margin-bottom: 16px; }
+.modal label { display: block; font-size: 12px; color: var(--text2); margin: 10px 0 4px; font-weight: 500; }
+.modal input, .modal textarea, .modal select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); border-radius: 6px; font-size: 13px; font-family: inherit; }
+.modal textarea { min-height: 60px; resize: vertical; }
+.modal .actions { display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end; }
+.alias-type-radio:hover { border-color: var(--accent) !important; }
+.alias-type-radio input[type="radio"]:checked + div { color: var(--text); }
+
+.toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 20px; border-radius: 8px; font-size: 13px; z-index: 200; animation: slideIn .3s; }
+.toast-ok { background: #059669; color: #fff; }
+.toast-err { background: #dc2626; color: #fff; }
+@keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+.loading { text-align: center; padding: 40px; color: var(--text2); }
+
+.help-panel { margin: 0 24px; padding: 18px 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; line-height: 1.8; color: var(--text2); }
+.help-panel h3 { color: var(--text); font-size: 14px; margin: 14px 0 6px; }
+.help-panel h3:first-child { margin-top: 0; }
+.help-panel .field-row { display: flex; gap: 8px; padding: 2px 0; }
+.help-panel .field-name { color: var(--accent); font-weight: 600; min-width: 180px; }
+.help-panel .required { color: var(--red); font-size: 11px; font-weight: 600; }
+.help-panel .optional { color: var(--text2); font-size: 11px; }
+.help-panel .tip { background: rgba(79,143,247,0.08); border-left: 3px solid var(--accent); padding: 8px 12px; margin: 8px 0; border-radius: 0 6px 6px 0; color: var(--text); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Family Market — Ретро-Бонуси</h1>
+  <span class="subtitle">Адмін-панель управління справочниками</span>
+</div>
+
+<div class="nav" id="nav"></div>
+<div id="info-box" class="info-box"></div>
+<div class="toolbar" id="toolbar"></div>
+<div id="help-panel" class="help-panel" style="display:none"></div>
+<div class="table-wrap" id="table-wrap">
+  <div class="loading">Завантаження...</div>
+</div>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal"></div>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://mcqljkyllkziqsuhuxqd.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1jcWxqa3lsbGt6aXFzdWh1eHFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNjEzMDUsImV4cCI6MjA5MzYzNzMwNX0.wdItjnmS_rfFgo4m03gLETrxSIaeWqm3SKPT6gdhIOc';
+
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const TABLES = {
+  suppliers: {
+    label: 'Поставщики',
+    desc: '<b>Поставщики</b> — основной справочник. Здесь вы можете активировать/деактивировать ретро (<b>is_retro_active</b>), указать юр. данные и контакты.',
+    order: 'name',
+    showRowNum: true,
+    columns: [
+      { key: 'name', label: 'Название', editable: true, width: '200px' },
+      { key: 'is_retro_active', label: 'Ретро', editable: true, type: 'bool' },
+      { key: 'legal_name', label: 'Юр. название', editable: true },
+      { key: 'edrpou', label: 'ЕДРПОУ', editable: true },
+      { key: 'category', label: 'Категория', editable: true },
+      { key: 'contact_person', label: 'Контакт', editable: true },
+      { key: 'contact_phone', label: 'Телефон', editable: true },
+      { key: 'notes', label: 'Примечание', editable: true, type: 'text' },
+    ],
+    editFields: ['name','legal_name','edrpou','bank_account','category','is_retro_active','contract_number','contract_date','contact_person','contact_email','contact_phone','retro_description','notes'],
+  },
+  supplier_brands: {
+    label: 'Бренды',
+    desc: '<b>Бренды поставщиков</b> — торговые марки. Ретро-правила привязываются к бренду.',
+    order: 'name',
+    columns: [
+      { key: '_supplier_name', label: 'Поставщик', computed: true, width: '180px' },
+      { key: 'name', label: 'Бренд', editable: true, width: '180px' },
+      { key: 'is_retro_active', label: 'Ретро', editable: true, type: 'bool' },
+      { key: 'display_name', label: 'Отображение', editable: true },
+      { key: 'notes', label: 'Примечание', editable: true, type: 'text' },
+    ],
+    editFields: ['supplier_id','name','display_name','is_retro_active','retro_description','notes'],
+    fk: { supplier_id: 'suppliers' },
+  },
+  supplier_aliases: {
+    label: 'Алиасы',
+    desc: '<b>Алиасы</b> — имена поставщиков в 1С / BigQuery. ' +
+          '<b>Тип:</b> ' +
+          '<span style="color:#34d399">Branded</span> — учитывается только для указанного бренда. ' +
+          '<span style="color:#fbbf24">Remainder</span> — попадает в остаточный расчёт. ' +
+          '<span style="color:#f87171">Excluded</span> — исключён из расчёта.',
+    order: 'alias_name',
+    columns: [
+      { key: '_supplier_name', label: 'Поставщик', computed: true, width: '180px' },
+      { key: 'alias_name', label: 'Алиас (имя в 1С)', editable: true, width: '220px' },
+      { key: 'alias_type', label: 'Тип', editable: true, type: 'alias_type_tag' },
+      { key: '_brand_name', label: 'Бренд', computed: true },
+      { key: 'source', label: 'Источник', editable: true },
+      { key: 'notes', label: 'Примечание', editable: true },
+    ],
+    editFields: ['supplier_id','alias_type','supplier_brand_id','alias_name','source','notes'],
+    fk: { supplier_id: 'suppliers', supplier_brand_id: 'supplier_brands' },
+  },
+  retro_rules: {
+    label: 'Правила ретро',
+    desc: '<b>Правила ретро-бонусов</b> — % бонуса для каждого бренда.',
+    order: 'created_at',
+    columns: [
+      { key: '_brand_name', label: 'Бренд', computed: true, width: '180px' },
+      { key: '_supplier_name', label: 'Поставщик', computed: true, width: '160px' },
+      { key: 'retro_min', label: '%', editable: true, width: '60px' },
+      { key: 'bonus_form', label: 'Форма', editable: true },
+      { key: 'retro_base_type', label: 'База расчёта', editable: true },
+      { key: 'valid_from', label: 'С', editable: true },
+      { key: 'valid_to', label: 'По', editable: true },
+      { key: 'sku_barcodes', label: 'SKU', type: 'sku_count' },
+      { key: 'status', label: 'Статус', editable: true },
+      { key: 'notes', label: 'Примечание', editable: true, type: 'text' },
+    ],
+    editFields: ['supplier_brand_id','retro_min','retro_max','retro_raw','bonus_form','retro_base_type','valid_from','valid_to','min_purchase_threshold','sku_barcodes','excluded_sku_barcodes','returns_policy','cups_per_kg','price_per_portion','status','notes','extra_conditions'],
+    fk: { supplier_brand_id: 'supplier_brands' },
+  },
+  supplier_monthly_bonuses: {
+    label: 'Месячные бонусы',
+    desc: '<b>Месячные фикс-бонусы</b> — фиксированные суммы, прибавляемые к ретро каждый месяц (напр. за размещение продукции). Не зависят от оборота и возвратов.',
+    order: 'valid_from',
+    columns: [
+      { key: '_supplier_name', label: 'Поставщик', computed: true, width: '220px' },
+      { key: 'amount', label: 'Сумма, грн', editable: true, width: '110px' },
+      { key: 'bonus_form', label: 'Форма', editable: true },
+      { key: 'description', label: 'Описание', editable: true, width: '260px' },
+      { key: 'valid_from', label: 'С', editable: true, width: '110px' },
+      { key: 'valid_to', label: 'По', editable: true, width: '110px' },
+      { key: 'status', label: 'Статус', editable: true },
+      { key: 'notes', label: 'Примечание', editable: true, type: 'text' },
+    ],
+    editFields: ['supplier_id','amount','bonus_form','description','valid_from','valid_to','status','notes'],
+    fk: { supplier_id: 'suppliers' },
+  },
+};
+  
+let currentTable = 'suppliers';
+let allData = {};
+let lookups = { suppliers: {}, supplier_brands: {}, brand_supplier: {} };
+let searchTerm = '';
+let sortCol = null;
+let sortDir = 'asc';
+
+async function init() {
+  renderNav();
+  await loadLookups();
+  await switchTable('suppliers');
+}
+
+async function loadLookups() {
+  lookups = { suppliers: {}, supplier_brands: {}, brand_supplier: {} };
+  const { data: s, error: e1 } = await sb.from('suppliers').select('id, name');
+  if (e1) console.error('loadLookups suppliers error:', e1);
+  (s || []).forEach(r => lookups.suppliers[r.id] = r.name);
+  const { data: b, error: e2 } = await sb.from('supplier_brands').select('id, name, supplier_id');
+  if (e2) console.error('loadLookups brands error:', e2);
+  (b || []).forEach(r => { lookups.supplier_brands[r.id] = r.name; lookups.brand_supplier[r.id] = r.supplier_id; });
+  console.log(`Lookups loaded: ${Object.keys(lookups.suppliers).length} suppliers, ${Object.keys(lookups.supplier_brands).length} brands`);
+}
+
+function renderNav() {
+  const nav = document.getElementById('nav');
+  let html = Object.entries(TABLES).map(([k, v]) =>
+    `<button class="nav-btn ${k === currentTable ? 'active' : ''}" onclick="switchTable('${k}')">${v.label}</button>`
+  ).join('');
+  html += `<button class="nav-btn ${currentTable === '_reconciliation' ? 'active' : ''}" onclick="switchToReconciliation()" style="margin-left:12px;border-left:2px solid var(--accent)">💰 Факт оплат ретро</button>`;
+  nav.innerHTML = html;
+}
+
+async function switchTable(name) {
+  currentTable = name;
+  searchTerm = '';
+  sortCol = null;
+  renderNav();
+  document.getElementById('info-box').innerHTML = TABLES[name].desc;
+  document.getElementById('help-panel').style.display = 'none';
+  renderToolbar();
+  await loadLookups();
+  await loadTable();
+}
+async function switchToReconciliation() {
+  currentTable = '_reconciliation';
+  searchTerm = '';
+  sortCol = null;
+  renderNav();
+  document.getElementById('info-box').innerHTML = 
+    '<b>Факт оплат ретро</b> — вносите фактически оплаченные суммы вручную. ' +
+    'Двойной клик на ячейку — внести/изменить оплату. ' +
+    '<span style="color:#34d399">Зелёный</span> — оплачено 98-102%, ' +
+    '<span style="color:#fbbf24">жёлтый</span> — частично (50-97%), ' +
+    '<span style="color:#f87171">красный</span> — не оплачено или &lt;50%, ' +
+    '<span style="color:#a78bfa">фиолетовый</span> — переплата.';
+  document.getElementById('help-panel').style.display = 'none';
+  renderReconciliationToolbar();
+  await loadReconciliation();
+}
+
+function renderToolbar() {
+  const tb = document.getElementById('toolbar');
+  tb.innerHTML = `
+    <input type="text" placeholder="Поиск..." oninput="onSearch(this.value)" id="search-input">
+    <button class="btn btn-ghost" onclick="clearSearch()" title="Сбросить поиск">✕</button>
+    <button class="btn btn-primary" onclick="openAddModal()">+ Добавить</button>
+    <button class="btn btn-ghost" onclick="loadTable()">Обновить</button>
+    <button class="btn btn-ghost" onclick="toggleHelp()" id="help-btn">? Помощь</button>
+    <span class="count-badge" id="count-badge"></span>
+  `;
+}
+
+function clearSearch() {
+  searchTerm = '';
+  const input = document.getElementById('search-input');
+  if (input) input.value = '';
+  renderTable();
+}
+
+function toggleHelp() {
+  const panel = document.getElementById('help-panel');
+  const btn = document.getElementById('help-btn');
+  if (panel.style.display === 'none') {
+    panel.style.display = 'block';
+    btn.style.background = 'var(--accent)';
+    btn.style.color = '#fff';
+    panel.innerHTML = getHelpContent();
+  } else {
+    panel.style.display = 'none';
+    btn.style.background = '';
+    btn.style.color = '';
+  }
+}
+
+function getHelpContent() {
+  return `
+<h3>Алиасы — типы</h3>
+<div class="tip">
+  <b>Branded</b> — алиас привязан к конкретному бренду. Учитывается только в расчёте этого бренда.<br>
+  <b>Remainder</b> — алиас без бренда. Суммы попадают в "остаточный" расчёт для правил без точной привязки.<br>
+  <b>Excluded</b> — алиас полностью исключён из расчёта ретро.
+</div>
+<h3>Правила ретро — новые поля</h3>
+<div class="field-row"><span class="field-name">returns_policy</span> — что делать с возвратами: subtract / none / physical_exchange.</div>
+<div class="field-row"><span class="field-name">cups_per_kg</span> — для per_portion_sold (кофе): порций с килограмма.</div>
+<div class="field-row"><span class="field-name">price_per_portion</span> — для per_portion_sold: цена бонуса за одну порцию (грн).</div>
+<h3>Порядок добавления нового поставщика</h3>
+<div class="tip">
+1. Создайте поставщика (is_retro_active = Да).<br>
+2. Добавьте бренд(ы).<br>
+3. Добавьте алиас(ы): тип Branded если привязан к бренду, Remainder если общий.<br>
+4. Создайте правило ретро для каждого бренда.<br>
+5. Запустите calculate_retro.py.
+</div>
+`;
+}
+
+function onSearch(val) {
+  searchTerm = val.toLowerCase();
+  renderTable();
+}
+
+async function loadTable() {
+  const wrap = document.getElementById('table-wrap');
+  wrap.innerHTML = '<div class="loading">Завантаження...</div>';
+  const cfg = TABLES[currentTable];
+  const { data, error } = await sb.from(currentTable).select('*').order(cfg.order || 'created_at', { ascending: true });
+  if (error) { wrap.innerHTML = `<div class="loading" style="color:var(--red)">Помилка: ${error.message}</div>`; return; }
+  allData[currentTable] = data || [];
+  renderTable();
+}
+
+function renderTable() {
+  const cfg = TABLES[currentTable];
+  const data = filterData(allData[currentTable] || []);
+  document.getElementById('count-badge').textContent = `${data.length} записей`;
+
+  if (sortCol) {
+    data.sort((a, b) => {
+      let va = getCellValue(a, sortCol, cfg), vb = getCellValue(b, sortCol, cfg);
+      if (va == null) va = ''; if (vb == null) vb = '';
+      let cmp = String(va).localeCompare(String(vb), 'uk', { numeric: true });
+      return sortDir === 'desc' ? -cmp : cmp;
+    });
+  }
+
+  const wrap = document.getElementById('table-wrap');
+  let html = '<table><thead><tr>';
+  if (cfg.showRowNum) html += '<th style="width:40px;text-align:center">№</th>';
+  cfg.columns.forEach(col => {
+    const arrow = sortCol === col.key ? (sortDir === 'asc' ? '▲' : '▼') : '';
+    html += `<th style="${col.width ? 'min-width:'+col.width : ''}" onclick="toggleSort('${col.key}')">${col.label}<span class="sort-arrow">${arrow}</span></th>`;
+  });
+  html += '<th style="width:80px">Действия</th></tr></thead><tbody>';
+
+  data.forEach((row, idx) => {
+    html += '<tr>';
+    if (cfg.showRowNum) html += `<td style="text-align:center;color:var(--text2)">${idx + 1}</td>`;
+    cfg.columns.forEach(col => {
+      const val = getCellValue(row, col.key, cfg);
+      let display = formatCell(val, col);
+      const cls = col.editable ? ' class="editable" ondblclick="openEditModal(\''+row.id+'\')"' : '';
+      html += `<td${cls}>${display}</td>`;
+    });
+    html += `<td>
+      <button class="btn btn-ghost" style="padding:3px 8px;font-size:12px" onclick="openEditModal('${row.id}')">✎</button>
+      <button class="btn btn-ghost" style="padding:3px 8px;font-size:12px;color:var(--red)" onclick="deleteRow('${row.id}')">✕</button>
+    </td>`;
+    html += '</tr>';
+  });
+
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+function getCellValue(row, key, cfg) {
+  if (key === '_supplier_name') {
+    if (row.supplier_id) return lookups.suppliers[row.supplier_id] || '—';
+    if (row.supplier_brand_id) {
+      const sid = lookups.brand_supplier && lookups.brand_supplier[row.supplier_brand_id];
+      return sid ? (lookups.suppliers[sid] || '—') : '—';
+    }
+    return '—';
+  }
+  if (key === '_brand_name') {
+    if (row.supplier_brand_id) return lookups.supplier_brands[row.supplier_brand_id] || '—';
+    return '—';
+  }
+  return row[key];
+}
+
+function formatCell(val, col) {
+  if (val === null || val === undefined) return '<span style="color:var(--text2)">—</span>';
+  if (col.type === 'bool') return val ? '<span class="tag tag-green">Да</span>' : '<span class="tag tag-red">Нет</span>';
+  if (col.type === 'sku_count') {
+    if (Array.isArray(val)) return `<span class="tag tag-blue">${val.length} шт</span>`;
+    if (typeof val === 'string' && val.startsWith('[')) { try { return `<span class="tag tag-blue">${JSON.parse(val).length} шт</span>`; } catch(e) {} }
+    return '—';
+  }
+  if (col.type === 'alias_type_tag') {
+    if (val === 'branded')   return '<span class="tag tag-green">Branded</span>';
+    if (val === 'remainder') return '<span class="tag tag-orange">Remainder</span>';
+    if (val === 'excluded')  return '<span class="tag tag-red">Excluded</span>';
+    return '<span class="tag tag-blue">' + (val || '—') + '</span>';
+  }
+  if (col.key === 'bonus_form') {
+    if (val === 'marketing_service') return '<span class="tag tag-orange">Маркетинг (НДС)</span>';
+    return '<span class="tag tag-blue">Ф2 (нал)</span>';
+  }
+  if (col.key === 'retro_base_type') {
+    const m = { shipment_minus_return: 'Приход−возврат', payments: 'Оплаты', per_portion_sold: 'За порцію' };
+    return m[val] || val;
+  }
+  if (col.key === 'status') {
+    const colors = { draft: 'tag-blue', active: 'tag-green', archived: 'tag-red', in_progress: 'tag-orange', completed: 'tag-green', approved: 'tag-green', paid: 'tag-green', cancelled: 'tag-red' };
+    return `<span class="tag ${colors[val] || ''}">${val}</span>`;
+  }
+  if (col.key === 'retro_min' || col.key === 'retro_max') return val + '%';
+  return escHtml(String(val));
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function filterData(data) {
+  if (!searchTerm) return [...data];
+  return data.filter(row => {
+    const cfg = TABLES[currentTable];
+    return cfg.columns.some(col => {
+      const v = getCellValue(row, col.key, cfg);
+      return v != null && String(v).toLowerCase().includes(searchTerm);
+    });
+  });
+}
+
+function toggleSort(col) {
+  if (sortCol === col) { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; }
+  else { sortCol = col; sortDir = 'asc'; }
+  renderTable();
+}
+
+async function openEditModal(id) {
+  await loadLookups();
+  const cfg = TABLES[currentTable];
+  const row = (allData[currentTable] || []).find(r => r.id === id);
+  if (!row) return;
+  renderModal('Редагування', cfg.editFields, row, async (vals) => {
+    const clean = cleanVals(vals, cfg);
+    const { error } = await sb.from(currentTable).update(clean).eq('id', id);
+    if (error) { toast('Помилка: ' + error.message, true); return; }
+    toast('Збережено');
+    closeModal();
+    if (currentTable === 'suppliers' || currentTable === 'supplier_brands') await loadLookups();
+    await loadTable();
+  });
+}
+
+async function openAddModal() {
+  await loadLookups();
+  const cfg = TABLES[currentTable];
+  renderModal('Додати запис', cfg.editFields, {}, async (vals) => {
+    const clean = cleanVals(vals, cfg);
+    const { error } = await sb.from(currentTable).insert(clean);
+    if (error) { toast('Помилка: ' + error.message, true); return; }
+    toast('Додано');
+    closeModal();
+    if (currentTable === 'suppliers' || currentTable === 'supplier_brands') await loadLookups();
+    await loadTable();
+  });
+}
+
+function renderModal(title, fields, row, onSave) {
+  const cfg = TABLES[currentTable];
+  let html = `<h2>${title}</h2>`;
+  fields.forEach(f => {
+    const val = row[f] ?? '';
+    const label = fieldLabel(f);
+    if (f === 'supplier_id') {
+      html += `<label>${label}</label><select id="f_${f}" onchange="filterBrandDropdown()">
+        <option value="">— выберите —</option>
+        ${Object.entries(lookups.suppliers).sort((a,b) => a[1].localeCompare(b[1],'uk')).map(([id,name]) =>
+          `<option value="${id}" ${val===id?'selected':''}>${escHtml(name)}</option>`
+        ).join('')}
+      </select>`;
+    } else if (f === 'alias_type') {
+      const cur = val || 'remainder';
+      html += `<label>${label}</label>
+      <div style="display:flex; gap:8px; margin-bottom:4px">
+        <label class="alias-type-radio" style="flex:1; padding:8px 12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; background:var(--surface2); display:flex; align-items:center; gap:8px">
+          <input type="radio" name="alias_type_radio" value="branded" ${cur==='branded'?'checked':''} onchange="onAliasTypeChange('branded')">
+          <div>
+            <div style="color:var(--green); font-weight:600">Branded</div>
+            <div style="font-size:11px; color:var(--text2)">Только для бренда</div>
+          </div>
+        </label>
+        <label class="alias-type-radio" style="flex:1; padding:8px 12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; background:var(--surface2); display:flex; align-items:center; gap:8px">
+          <input type="radio" name="alias_type_radio" value="remainder" ${cur==='remainder'?'checked':''} onchange="onAliasTypeChange('remainder')">
+          <div>
+            <div style="color:var(--orange); font-weight:600">Remainder</div>
+            <div style="font-size:11px; color:var(--text2)">Остаток</div>
+          </div>
+        </label>
+        <label class="alias-type-radio" style="flex:1; padding:8px 12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; background:var(--surface2); display:flex; align-items:center; gap:8px">
+          <input type="radio" name="alias_type_radio" value="excluded" ${cur==='excluded'?'checked':''} onchange="onAliasTypeChange('excluded')">
+          <div>
+            <div style="color:var(--red); font-weight:600">Excluded</div>
+            <div style="font-size:11px; color:var(--text2)">Исключить</div>
+          </div>
+        </label>
+      </div>
+      <input type="hidden" id="f_alias_type" value="${cur}">`;
+    } else if (f === 'supplier_brand_id') {
+      const selectedSupplierId = row.supplier_id || '';
+      const isAliasTable = currentTable === 'supplier_aliases';
+      const curAliasType = row.alias_type || 'remainder';
+      const wrapStyle = (isAliasTable && curAliasType !== 'branded') ? 'display:none' : '';
+      html += `<div id="brand_wrap" style="${wrapStyle}">
+        <label>${label}</label>
+        <select id="f_supplier_brand_id">
+          <option value="">— выберите бренд —</option>
+          ${Object.entries(lookups.supplier_brands).sort((a,b) => a[1].localeCompare(b[1],'uk')).map(([id,name]) => {
+            const brandSuppId = lookups.brand_supplier[id] || '';
+            const suppName = lookups.suppliers[brandSuppId] || '?';
+            const hidden = selectedSupplierId && brandSuppId !== selectedSupplierId ? ' hidden disabled' : '';
+            return `<option value="${id}" data-supplier="${brandSuppId}" ${val===id?'selected':''}${hidden}>${escHtml(name)} (${escHtml(suppName)})</option>`;
+          }).join('')}
+        </select>
+      </div>`;
+    } else if (f === 'is_retro_active') {
+      html += `<label>${label}</label><select id="f_${f}">
+        <option value="true" ${val === true ? 'selected' : ''}>Да</option>
+        <option value="false" ${val === false || val === '' ? 'selected' : ''}>Нет</option>
+      </select>`;
+    } else if (f === 'bonus_form') {
+      html += `<label>${label}</label><select id="f_${f}">
+        <option value="price_correction" ${val==='price_correction'||!val?'selected':''}>Ф2 (корректировка цены)</option>
+        <option value="marketing_service" ${val==='marketing_service'?'selected':''}>Маркетинговая услуга (с НДС)</option>
+      </select>`;
+    } else if (f === 'retro_base_type') {
+      html += `<label>${label}</label><select id="f_${f}">
+        <option value="shipment_minus_return" ${val==='shipment_minus_return'||!val?'selected':''}>Приход − возврат</option>
+        <option value="payments" ${val==='payments'?'selected':''}>Оплаты</option>
+        <option value="per_portion_sold" ${val==='per_portion_sold'?'selected':''}>За порцію</option>
+      </select>`;
+    } else if (f === 'returns_policy') {
+      html += `<label>${label}</label><select id="f_${f}">
+        <option value="subtract" ${val==='subtract'||!val?'selected':''}>Вычитать возвраты</option>
+        <option value="none" ${val==='none'?'selected':''}>Не вычитать (нет возвратов)</option>
+        <option value="physical_exchange" ${val==='physical_exchange'?'selected':''}>Физический обмен</option>
+      </select>`;
+} else if (f === 'status') {
+  const statuses = currentTable === 'supplier_monthly_bonuses'
+    ? ['active','archived','draft']
+    : ['draft','in_progress','completed','approved','paid','cancelled'];
+  html += `<label>${label}</label><select id="f_${f}">
+    ${statuses.map(s =>
+      `<option value="${s}" ${val===s?'selected':''}>${s}</option>`
+    ).join('')}
+  </select>`;
+    } else if (f === 'notes' || f === 'extra_conditions' || f === 'retro_description') {
+      html += `<label>${label}</label><textarea id="f_${f}">${escHtml(String(val || ''))}</textarea>`;
+    } else if (f === 'sku_barcodes' || f === 'excluded_sku_barcodes') {
+      const arr = Array.isArray(val) ? val : [];
+      html += `<label>${label} (по одному на строку)</label><textarea id="f_${f}" rows="4">${arr.join('\n')}</textarea>`;
+    } else {
+      html += `<label>${label}</label><input id="f_${f}" value="${escHtml(String(val || ''))}">`;
+    }
+  });
+  html += `<div class="actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Отмена</button>
+    <button class="btn btn-green" onclick="saveModal()">Сохранить</button>
+  </div>`;
+
+  document.getElementById('modal').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+
+  window._modalSave = () => {
+    const vals = {};
+    fields.forEach(f => {
+      const el = document.getElementById('f_' + f);
+      if (el) vals[f] = el.value;
+    });
+    const required = {
+  suppliers: ['name'],
+  supplier_brands: ['supplier_id', 'name'],
+  supplier_aliases: ['supplier_id', 'alias_name', 'alias_type'],
+  retro_rules: ['supplier_brand_id', 'retro_min'],
+  supplier_monthly_bonuses: ['supplier_id', 'amount', 'valid_from'],
+};
+const reqLabels = {
+  name: 'Название', supplier_id: 'Поставщик', alias_name: 'Имя алиаса',
+  supplier_brand_id: 'Бренд', retro_min: '% мин', alias_type: 'Тип алиаса',
+  amount: 'Сумма', valid_from: 'Дата начала',
+};
+    const missing = (required[currentTable] || []).filter(f => !vals[f] || !String(vals[f]).trim());
+    if (missing.length) {
+      toast('Заполните: ' + missing.map(f => reqLabels[f] || f).join(', '), true);
+      return;
+    }
+    if (currentTable === 'supplier_aliases') {
+      if (vals.alias_type === 'branded' && !vals.supplier_brand_id) {
+        toast('Для Branded-алиаса нужно выбрать бренд', true);
+        return;
+      }
+      if (vals.alias_type !== 'branded') {
+        vals.supplier_brand_id = '';
+      }
+    }
+    onSave(vals);
+  };
+}
+
+function onAliasTypeChange(type) {
+  const hidden = document.getElementById('f_alias_type');
+  if (hidden) hidden.value = type;
+  const wrap = document.getElementById('brand_wrap');
+  const brandSelect = document.getElementById('f_supplier_brand_id');
+  if (wrap) {
+    if (type === 'branded') {
+      wrap.style.display = 'block';
+    } else {
+      wrap.style.display = 'none';
+      if (brandSelect) brandSelect.value = '';
+    }
+  }
+}
+
+function filterBrandDropdown() {
+  const suppSelect = document.getElementById('f_supplier_id');
+  const brandSelect = document.getElementById('f_supplier_brand_id');
+  if (!suppSelect || !brandSelect) return;
+  const suppId = suppSelect.value;
+  const options = brandSelect.querySelectorAll('option[data-supplier]');
+  brandSelect.value = '';
+  options.forEach(opt => {
+    if (!suppId || opt.dataset.supplier === suppId) {
+      opt.hidden = false;
+      opt.disabled = false;
+    } else {
+      opt.hidden = true;
+      opt.disabled = true;
+    }
+  });
+}
+
+function saveModal() { if (window._modalSave) window._modalSave(); }
+function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }
+
+document.getElementById('modal-overlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('modal-overlay')) closeModal();
+});
+
+function cleanVals(vals, cfg) {
+  const clean = {};
+  Object.entries(vals).forEach(([k, v]) => {
+    if (k === 'is_retro_active') { clean[k] = v === 'true'; return; }
+    if (k === 'sku_barcodes' || k === 'excluded_sku_barcodes') {
+      const lines = String(v).split('\n').map(l => l.trim()).filter(Boolean);
+      clean[k] = lines.length ? lines : null;
+      return;
+    }
+if (k === 'retro_min' || k === 'retro_max' || k === 'min_purchase_threshold' || k === 'price_per_portion' || k === 'amount') {
+  clean[k] = v ? parseFloat(v) : null;
+  return;
+}
+    if (k === 'cups_per_kg') {
+      clean[k] = v ? parseInt(v, 10) : null;
+      return;
+    }
+    if ((k === 'supplier_id' || k === 'supplier_brand_id') && !v) { clean[k] = null; return; }
+    if ((k === 'valid_to' || k === 'valid_from') && !v) { clean[k] = null; return; }
+    if (k === 'alias_type') { clean[k] = v || 'remainder'; return; }
+    clean[k] = v || null;
+  });
+  return clean;
+}
+
+function fieldLabel(f) {
+  const labels = {
+    name: 'Название', legal_name: 'Юр. название', edrpou: 'ЕДРПОУ', bank_account: 'Расч. счёт',
+    category: 'Категория', is_retro_active: 'Ретро активен', contract_number: '№ договора',
+    contract_date: 'Дата договора', contact_person: 'Контакт. лицо', contact_email: 'Email',
+    contact_phone: 'Телефон', retro_description: 'Описание ретро', notes: 'Примечание',
+    supplier_id: 'Поставщик', supplier_brand_id: 'Бренд', alias_name: 'Имя алиаса (как в 1С)',
+    alias_type: 'Тип алиаса',
+    source: 'Источник', display_name: 'Отображаемое имя', retro_min: '% мин', retro_max: '% макс',
+    retro_raw: '% (текст)', bonus_form: 'Форма бонуса', retro_base_type: 'База расчёта',
+    valid_from: 'Действует с', valid_to: 'Действует по', min_purchase_threshold: 'Мин. порог закупки',
+    sku_barcodes: 'Штрих-коды (SKU)', excluded_sku_barcodes: 'Исключённые SKU',
+    returns_policy: 'Политика возвратов', status: 'Статус', extra_conditions: 'Доп. условия',
+    cups_per_kg: 'Порций с кг (для per_portion_sold)',
+    price_per_portion: 'Цена за порцию, грн (для per_portion_sold)',
+    amount: 'Сумма (грн/мес)',
+    description: 'Описание',
+
+  };
+  return labels[f] || f;
+}
+
+async function deleteRow(id) {
+  if (!confirm('Точно удалить эту запись?')) return;
+  const { error } = await sb.from(currentTable).delete().eq('id', id);
+  if (error) { toast('Помилка: ' + error.message, true); return; }
+  toast('Видалено');
+  await loadTable();
+}
+
+function toast(msg, isErr) {
+  const t = document.createElement('div');
+  t.className = `toast ${isErr ? 'toast-err' : 'toast-ok'}`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+// ============================================================================
+// ФАКТ ОПЛАТ РЕТРО — отдельный режим (не CRUD-таблица)
+// ============================================================================
+
+let reconData = { calcs: [], facts: [], months: [], suppliers: [] };
+let reconFilter = 'all'; // 'all' | 'with_diff' | 'unpaid'
+
+function renderReconciliationToolbar() {
+  const tb = document.getElementById('toolbar');
+  tb.innerHTML = `
+    <input type="text" placeholder="Поиск поставщика..." oninput="onReconSearch(this.value)" id="search-input">
+    <button class="btn btn-ghost" onclick="clearReconSearch()" title="Сбросить поиск">✕</button>
+    <select id="recon-filter" onchange="onReconFilterChange(this.value)" style="padding:7px 12px;border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:6px;font-size:13px">
+      <option value="all">Все поставщики</option>
+      <option value="with_diff">Только с расхождениями</option>
+      <option value="unpaid">Только неоплаченные</option>
+      <option value="zero_charged">Только с нулевым начислением</option>
+    </select>
+    <button class="btn btn-ghost" onclick="loadReconciliation()">Обновить</button>
+    <span class="count-badge" id="count-badge"></span>
+  `;
+}
+
+function onReconSearch(val) {
+  searchTerm = val.toLowerCase();
+  renderReconciliation();
+}
+
+function clearReconSearch() {
+  searchTerm = '';
+  const input = document.getElementById('search-input');
+  if (input) input.value = '';
+  renderReconciliation();
+}
+
+function onReconFilterChange(val) {
+  reconFilter = val;
+  renderReconciliation();
+}
+
+async function loadReconciliation() {
+  const wrap = document.getElementById('table-wrap');
+  wrap.innerHTML = '<div class="loading">Завантаження...</div>';
+
+  await loadLookups();
+
+  // Загружаем начисления
+  const { data: calcs, error: e1 } = await sb.from('retro_calculations')
+    .select('id, supplier_id, period_label, total_retro, status');
+
+  // Загружаем base_type для каждого поставщика
+  const { data: rules } = await sb.from('retro_rules')
+    .select('supplier_brand_id, retro_base_type')
+    .eq('status', 'active');
+  const { data: rulebBrands } = await sb.from('supplier_brands')
+    .select('id, supplier_id');
+  const baseTypeBySupplier = {};
+  const brandSupMap = {};
+  (rulebBrands || []).forEach(b => brandSupMap[b.id] = b.supplier_id);
+  (rules || []).forEach(r => {
+    const sid = brandSupMap[r.supplier_brand_id];
+    if (sid && r.retro_base_type) baseTypeBySupplier[sid] = r.retro_base_type;
+  });
+  if (e1) {
+    wrap.innerHTML = `<div class="loading" style="color:var(--red)">Помилка: ${e1.message}</div>`;
+    return;
+  }
+
+  // Загружаем факты оплат
+  const { data: facts, error: e2 } = await sb.from('retro_payments_fact')
+    .select('id, supplier_id, period_label, amount_paid, payment_date, doc_number, notes');
+  if (e2) {
+    wrap.innerHTML = `<div class="loading" style="color:var(--red)">Помилка: ${e2.message}</div>`;
+    return;
+  }
+
+  // Собираем список месяцев (из начислений + фактов)
+  const monthsSet = new Set();
+  (calcs || []).forEach(c => monthsSet.add(c.period_label));
+  (facts || []).forEach(f => monthsSet.add(f.period_label));
+  const months = Array.from(monthsSet).sort();
+
+  // Собираем список поставщиков (только тех, у кого есть начисления или факты)
+  const supSet = new Set();
+  (calcs || []).forEach(c => supSet.add(c.supplier_id));
+  (facts || []).forEach(f => supSet.add(f.supplier_id));
+  const suppliers = Array.from(supSet)
+    .map(id => ({ id, name: lookups.suppliers[id] || '???' }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'uk'));
+
+  reconData = { calcs: calcs || [], facts: facts || [], months, suppliers, baseTypeBySupplier };
+  renderReconciliation();
+}
+
+function baseTypeIcon(baseType) {
+  if (baseType === 'payments') return '<span title="Ретро від оплат" style="cursor:help">💳</span>';
+  if (baseType === 'per_portion_sold') return '<span title="Ретро за порцію" style="cursor:help">☕</span>';
+  return '<span title="Ретро від приходів" style="cursor:help">🧾</span>';
+}
+
+
+function renderReconciliation() {
+  const wrap = document.getElementById('table-wrap');
+  const { calcs, facts, months, suppliers } = reconData;
+
+  if (!months.length || !suppliers.length) {
+    wrap.innerHTML = '<div class="loading">Нет данных. Сначала запустите расчёт ретро (calculate_retro.py).</div>';
+    return;
+  }
+
+  // Индексируем по (supplier_id + period_label)
+  const calcMap = {}; // key → total_retro
+  const factMap = {}; // key → {amount_paid, id, payment_date, doc_number, notes}
+  calcs.forEach(c => { calcMap[c.supplier_id + '|' + c.period_label] = { total: parseFloat(c.total_retro) || 0, id: c.id, status: c.status }; });
+  facts.forEach(f => {
+    factMap[f.supplier_id + '|' + f.period_label] = {
+      id: f.id,
+      amount: parseFloat(f.amount_paid) || 0,
+      date: f.payment_date,
+      doc: f.doc_number,
+      notes: f.notes
+    };
+  });
+
+  // Фильтрация поставщиков
+  let filtered = suppliers.filter(s => {
+    if (searchTerm && !s.name.toLowerCase().includes(searchTerm)) return false;
+
+    if (reconFilter === 'all') return true;
+
+    // Считаем суммы по поставщику за все месяцы
+    let totalCharged = 0, totalPaid = 0;
+    months.forEach(m => {
+      totalCharged += (calcMap[s.id + '|' + m] || {}).total || 0;
+      totalPaid += (factMap[s.id + '|' + m] || {}).amount || 0;
+    });
+
+    if (reconFilter === 'unpaid') return totalCharged > 0 && totalPaid === 0;
+    if (reconFilter === 'with_diff') {
+      if (totalCharged === 0) return false;
+      const diffPct = Math.abs(totalPaid - totalCharged) / totalCharged * 100;
+      return diffPct > 2;
+    }
+    if (reconFilter === 'zero_charged') return totalCharged === 0;
+    return true;
+  });
+
+  document.getElementById('count-badge').textContent = `${filtered.length} поставщиков, ${months.length} месяцев`;
+
+  // Рендер таблицы
+  let html = '<table><thead><tr>';
+  html += '<th style="width:40px;text-align:center">№</th>';
+  html += '<th style="min-width:220px;position:sticky;left:0;background:var(--surface2);z-index:11">Поставщик</th>';
+  months.forEach(m => {
+    html += `<th style="min-width:180px;text-align:center" colspan="1">${m}</th>`;
+  });
+  html += '<th style="min-width:160px;text-align:center;background:var(--surface2)">ИТОГО</th>';
+  html += '</tr></thead><tbody>';
+
+  // Итоги по столбцам
+  const colTotals = {};
+  months.forEach(m => colTotals[m] = { charged: 0, paid: 0 });
+  let grandCharged = 0, grandPaid = 0;
+
+  filtered.forEach((s, idx) => {
+    let rowCharged = 0, rowPaid = 0;
+    let cellsHtml = '';
+    months.forEach(m => {
+      const calcEntry = calcMap[s.id + '|' + m] || {};
+      const charged = calcEntry.total || 0;
+      const factRow = factMap[s.id + '|' + m];
+      const paid = factRow ? factRow.amount : 0;
+      rowCharged += charged;
+      rowPaid += paid;
+      colTotals[m].charged += charged;
+      colTotals[m].paid += paid;
+      cellsHtml += renderReconCell(s.id, m, charged, factRow, calcEntry);
+    });
+    grandCharged += rowCharged;
+    grandPaid += rowPaid;
+
+    const rowStatus = getReconStatus(rowCharged, rowPaid);
+    html += `<tr>
+      <td style="text-align:center;color:var(--text2)">${idx + 1}</td>
+      <td style="position:sticky;left:0;background:var(--surface);font-weight:500">
+        ${baseTypeIcon(reconData.baseTypeBySupplier[s.id])} ${escHtml(s.name)}
+      </td>
+      ${cellsHtml}
+      <td style="text-align:right;background:var(--surface2);font-weight:600">
+        <div style="color:${rowStatus.color}">${fmt(rowPaid)} / ${fmt(rowCharged)}</div>
+        <div style="font-size:11px;color:var(--text2)">${rowStatus.label}</div>
+      </td>
+    </tr>`;
+  });
+
+  // Строка итогов
+  html += `<tr style="background:var(--surface2);font-weight:600;border-top:2px solid var(--accent)">
+    <td></td>
+    <td style="position:sticky;left:0;background:var(--surface2)">ИТОГО</td>`;
+  months.forEach(m => {
+    const t = colTotals[m];
+    const st = getReconStatus(t.charged, t.paid);
+    html += `<td style="text-align:right;padding:8px 10px">
+      <div style="color:${st.color}">${fmt(t.paid)}</div>
+      <div style="font-size:11px;color:var(--text2)">из ${fmt(t.charged)}</div>
+    </td>`;
+  });
+  const totalStatus = getReconStatus(grandCharged, grandPaid);
+  html += `<td style="text-align:right;padding:8px 10px;background:var(--surface)">
+    <div style="color:${totalStatus.color};font-size:14px">${fmt(grandPaid)}</div>
+    <div style="font-size:11px;color:var(--text2)">из ${fmt(grandCharged)}</div>
+  </td>`;
+  html += '</tr>';
+
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+function renderReconCell(supId, period, charged, factRow, calcEntry) {
+  const paid = factRow ? factRow.amount : 0;
+  const status = getReconStatus(charged, paid);
+  const isApproved = calcEntry && calcEntry.status === 'approved';
+  const isPaid = calcEntry && calcEntry.status === 'paid';
+  const isLocked = isApproved || isPaid;
+  const calcId = calcEntry && calcEntry.id;
+
+  const tooltip = factRow ?
+    `Оплачено ${fmt(paid)}\nДата: ${factRow.date || '—'}\nДокумент: ${factRow.doc || '—'}\nЗаметки: ${factRow.notes || '—'}` :
+    (charged > 0 ? `Не оплачено\nНачислено: ${fmt(charged)}` : 'Нет начислений');
+
+  const lockBadge = isLocked
+    ? `<div style="font-size:10px;color:${isPaid ? 'var(--green)' : '#a78bfa'};margin-top:2px">${isPaid ? '💚 оплачено' : '🔒 затверджено'}</div>`
+    : '';
+
+  const approveBtn = calcId && !isLocked && charged > 0
+    ? `<button onclick="event.stopPropagation();approveCalc('${calcId}','${supId}','${period}')"
+         title="Затвердити — захистить від перезапису"
+         style="margin-top:4px;font-size:10px;padding:2px 6px;border:1px solid #a78bfa;background:transparent;color:#a78bfa;border-radius:4px;cursor:pointer">🔒 lock</button>`
+    : '';
+
+  const unlockBtn = isApproved && calcId
+    ? `<button onclick="event.stopPropagation();unlockCalc('${calcId}','${supId}','${period}')"
+         title="Зняти захист"
+         style="margin-top:4px;font-size:10px;padding:2px 6px;border:1px solid var(--text2);background:transparent;color:var(--text2);border-radius:4px;cursor:pointer">🔓</button>`
+    : '';
+
+  return `<td class="${isLocked ? '' : 'editable'}"
+            style="text-align:right;padding:6px 10px;background:${isLocked ? 'rgba(167,139,250,0.05)' : status.bg}"
+            ondblclick="${isLocked ? '' : `openReconCellModal('${supId}','${period}')`}"
+            title="${escHtml(tooltip)}">
+    <div style="color:${status.color};font-weight:500">${fmt(paid)}</div>
+    <div style="font-size:11px;color:var(--text2)">з ${fmt(charged)} ${status.icon}</div>
+    ${lockBadge}
+    ${approveBtn}
+    ${unlockBtn}
+  </td>`;
+}
+
+function getReconStatus(charged, paid) {
+  if (charged === 0 && paid === 0) {
+    return { color: 'var(--text2)', bg: 'transparent', icon: '⬜', label: '—' };
+  }
+  if (charged === 0 && paid > 0) {
+    return { color: '#a78bfa', bg: 'rgba(167,139,250,0.08)', icon: '🟣', label: 'Без начисления' };
+  }
+  const pct = paid / charged * 100;
+  if (paid === 0) return { color: 'var(--red)', bg: 'rgba(248,113,113,0.08)', icon: '🔴', label: 'Не оплачено' };
+  if (pct < 50) return { color: 'var(--red)', bg: 'rgba(248,113,113,0.08)', icon: '🔴', label: `${pct.toFixed(0)}%` };
+  if (pct < 98) return { color: 'var(--orange)', bg: 'rgba(251,191,36,0.08)', icon: '🟡', label: `${pct.toFixed(0)}%` };
+  if (pct <= 102) return { color: 'var(--green)', bg: 'rgba(52,211,153,0.08)', icon: '🟢', label: 'OK' };
+  return { color: '#a78bfa', bg: 'rgba(167,139,250,0.08)', icon: '🟣', label: `+${(pct-100).toFixed(0)}%` };
+}
+
+async function approveCalc(calcId, supId, period) {
+  const sup = reconData.suppliers.find(s => s.id === supId);
+  const supName = sup ? sup.name : supId;
+  if (!confirm(`Затвердити розрахунок:\n${supName} — ${period}?\n\nПісля затвердження автоматичний перерахунок НЕ буде перезаписувати цей місяць.`)) return;
+  const { error } = await sb.from('retro_calculations').update({ status: 'approved' }).eq('id', calcId);
+  if (error) { toast(`Помилка: ${error.message}`, true); return; }
+  toast(`🔒 ${supName} ${period} — затверджено`);
+  await loadReconciliation();
+}
+
+async function unlockCalc(calcId, supId, period) {
+  const sup = reconData.suppliers.find(s => s.id === supId);
+  const supName = sup ? sup.name : supId;
+  if (!confirm(`Зняти захист:\n${supName} — ${period}?\n\nПісля зняття автоматичний перерахунок зможе перезаписати цей місяць.`)) return;
+  const { error } = await sb.from('retro_calculations').update({ status: 'completed' }).eq('id', calcId);
+  if (error) { toast(`Помилка: ${error.message}`, true); return; }
+  toast(`🔓 ${supName} ${period} — захист знято`);
+  await loadReconciliation();
+}
+
+function fmt(n) {
+  if (!n) return '0';
+  return n.toLocaleString('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+async function openReconCellModal(supId, period) {
+  const calcMap = {};
+  reconData.calcs.forEach(c => { calcMap[c.supplier_id + '|' + c.period_label] = { total: parseFloat(c.total_retro) || 0, id: c.id, status: c.status }; });
+  const calcEntry = calcMap[supId + '|' + period] || {};
+  const charged = calcEntry.total || 0;
+  const calcId = calcEntry.id || null;
+
+  const factRow = reconData.facts.find(f => f.supplier_id === supId && f.period_label === period);
+  const sup = reconData.suppliers.find(s => s.id === supId);
+  const supName = sup ? sup.name : '???';
+
+  let extrasHtml = '';
+  if (calcId) {
+    const { data: extras } = await sb.from('retro_calculation_details')
+      .select('id, retro_amount, notes')
+      .eq('calculation_id', calcId)
+      .eq('applied_percent', 0)
+      .neq('retro_amount', 0)
+      .is('retro_rule_id', null);
+
+    if (extras && extras.length) {
+      extras.forEach(e => {
+        extrasHtml += `<div style="display:flex;justify-content:space-between;align-items:center;
+          padding:4px 8px;background:rgba(52,211,153,0.08);border-radius:4px;margin-bottom:3px;font-size:12px">
+          <span style="color:var(--text2)">${escHtml(e.notes || '—')}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="color:var(--green);font-weight:600">+${fmt(e.retro_amount)} ₴</span>
+            <button onclick="deleteExtraPayment('${e.id}', ${e.retro_amount}, '${calcId}')"
+              style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:0 2px;line-height:1"
+              title="Видалити">✕</button>
+          </div>
+        </div>`;
+      });
+    }
+  }
+
+  const html = `
+    <h2>💰 Факт оплаты ретро</h2>
+    <div style="padding:12px;background:var(--surface2);border-radius:6px;margin-bottom:16px">
+      <div style="font-size:14px;font-weight:600;margin-bottom:6px">${escHtml(supName)}</div>
+      <div style="color:var(--text2);font-size:13px">Период: <b style="color:var(--text)">${period}</b></div>
+      <div style="color:var(--text2);font-size:13px">Начислено: <b style="color:var(--accent)">${fmt(charged)} ₴</b></div>
+    </div>
+
+    <label>Оплачено, грн *</label>
+    <input id="f_amount_paid" type="number" step="0.01" value="${factRow ? factRow.amount_paid : ''}" placeholder="0.00">
+
+    <label>Дата оплаты</label>
+    <input id="f_payment_date" type="date" value="${factRow && factRow.payment_date ? factRow.payment_date : ''}">
+
+    <label>№ документа</label>
+    <input id="f_doc_number" value="${escHtml(factRow && factRow.doc_number || '')}" placeholder="напр. Акт №123 от 15.02.2026">
+
+    <label>Заметки</label>
+    <textarea id="f_notes">${escHtml(factRow && factRow.notes || '')}</textarea>
+
+    ${calcId ? `
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text)">➕ Доп. виплата (куби, акції)</div>
+      ${extrasHtml}
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <input id="f_extra_amount" type="number" step="0.01" placeholder="Сума, грн" style="width:140px">
+        <input id="f_extra_notes" placeholder="Примітка (напр. куби)" style="flex:1">
+        <button class="btn btn-ghost" onclick="addExtraPayment('${calcId}')"
+          style="white-space:nowrap;border-color:var(--green);color:var(--green)">+ Додати</button>
+      </div>
+    </div>` : ''}
+
+    <div class="actions">
+      ${factRow ? `<button class="btn btn-red" onclick="deleteReconFact('${factRow.id}')">Удалить</button>` : ''}
+      <button class="btn btn-ghost" onclick="closeModal()">Отмена</button>
+      <button class="btn btn-green" onclick="saveReconFact('${supId}','${period}',${factRow ? "'"+factRow.id+"'" : 'null'})">Сохранить</button>
+    </div>
+  `;
+
+  document.getElementById('modal').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+  setTimeout(() => document.getElementById('f_amount_paid').focus(), 100);
+}
+
+async function addExtraPayment(calcId) {
+  const amount = parseFloat(document.getElementById('f_extra_amount').value);
+  const notes = document.getElementById('f_extra_notes').value || '';
+
+  if (isNaN(amount) || amount <= 0) { toast('Введіть коректну суму', true); return; }
+  if (!notes.trim()) { toast('Введіть примітку', true); return; }
+
+  // Берём supplier_brand_id из существующих деталей
+  const { data: existingDetail } = await sb.from('retro_calculation_details')
+    .select('supplier_brand_id').eq('calculation_id', calcId).limit(1);
+  const brandId = existingDetail && existingDetail.length ? existingDetail[0].supplier_brand_id : null;
+
+  const { error: e1 } = await sb.from('retro_calculation_details').insert({
+    calculation_id: calcId,
+    supplier_brand_id: brandId,
+    applied_percent: 0,
+    amount_purchased: 0,
+    amount_returned: 0,
+    amount_net: 0,
+    retro_amount: amount,
+    retro_amount_vat: amount,
+    bonus_form: 'price_correction',
+    notes: notes,
+  });
+  if (e1) { toast('Помилка: ' + e1.message, true); return; }
+
+  // Обновляем total_retro
+  const { data: calc } = await sb.from('retro_calculations')
+    .select('total_retro').eq('id', calcId).single();
+  const newTotal = (parseFloat(calc.total_retro) || 0) + amount;
+  await sb.from('retro_calculations').update({ total_retro: newTotal }).eq('id', calcId);
+
+  toast('✅ Доп. виплату додано');
+  
+  // Перезагружаем данные и переоткрываем модальное окно
+  await loadReconciliation();
+  
+  // Находим supId и period из calcId
+  const calcEntry = reconData.calcs.find(c => c.id === calcId);
+  if (calcEntry) {
+    openReconCellModal(calcEntry.supplier_id, calcEntry.period_label);
+  }
+}
+
+async function deleteExtraPayment(detailId, amount, calcId) {
+  if (!confirm('Видалити доп. виплату?')) return;
+
+  const { error } = await sb.from('retro_calculation_details').delete().eq('id', detailId);
+  if (error) { toast('Помилка: ' + error.message, true); return; }
+
+  // Зменшуємо total_retro
+  const { data: calc } = await sb.from('retro_calculations')
+    .select('total_retro').eq('id', calcId).single();
+  const newTotal = Math.max(0, (parseFloat(calc.total_retro) || 0) - parseFloat(amount));
+  await sb.from('retro_calculations').update({ total_retro: Math.round(newTotal * 100) / 100 }).eq('id', calcId);
+
+  toast('✅ Доп. виплату видалено');
+  await loadReconciliation();
+  const calcEntry = reconData.calcs.find(c => c.id === calcId);
+  if (calcEntry) openReconCellModal(calcEntry.supplier_id, calcEntry.period_label);
+}
+
+async function saveReconFact(supId, period, factId) {
+  const amount = parseFloat(document.getElementById('f_amount_paid').value);
+  if (isNaN(amount) || amount < 0) {
+    toast('Введите корректную сумму', true);
+    return;
+  }
+  const payload = {
+    supplier_id: supId,
+    period_label: period,
+    amount_paid: amount,
+    payment_date: document.getElementById('f_payment_date').value || null,
+    doc_number: document.getElementById('f_doc_number').value || null,
+    notes: document.getElementById('f_notes').value || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  let result;
+  if (factId && factId !== 'null') {
+    result = await sb.from('retro_payments_fact').update(payload).eq('id', factId);
+  } else {
+    result = await sb.from('retro_payments_fact').upsert(payload, { onConflict: 'supplier_id,period_label' });
+  }
+  if (result.error) {
+    toast('Помилка: ' + result.error.message, true);
+    return;
+  }
+  toast('Збережено');
+  closeModal();
+  await loadReconciliation();
+}
+
+async function deleteReconFact(factId) {
+  if (!confirm('Удалить запись об оплате?')) return;
+  const { error } = await sb.from('retro_payments_fact').delete().eq('id', factId);
+  if (error) {
+    toast('Помилка: ' + error.message, true);
+    return;
+  }
+  toast('Видалено');
+  closeModal();
+  await loadReconciliation();
+}
+
+async function requireLogin() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (session) { init(); return; }
+  document.getElementById('nav').innerHTML = '';
+  document.getElementById('toolbar').innerHTML = '';
+  document.getElementById('info-box').innerHTML = '';
+  document.getElementById('table-wrap').innerHTML = `
+    <div style="max-width:340px;margin:80px auto;padding:24px;background:var(--surface);
+                border:1px solid var(--border);border-radius:12px">
+      <h2 style="font-size:16px;margin-bottom:16px">Вход в панель</h2>
+      <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:4px">Email</label>
+      <input id="login_email" style="width:100%;padding:8px 10px;border:1px solid var(--border);
+             background:var(--surface2);color:var(--text);border-radius:6px;margin-bottom:10px">
+      <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:4px">Пароль</label>
+      <input id="login_pass" type="password" onkeydown="if(event.key==='Enter')doLogin()"
+             style="width:100%;padding:8px 10px;border:1px solid var(--border);
+             background:var(--surface2);color:var(--text);border-radius:6px;margin-bottom:16px">
+      <button class="btn btn-primary" style="width:100%" onclick="doLogin()">Войти</button>
+    </div>`;
+}
+
+async function doLogin() {
+  const email = document.getElementById('login_email').value.trim();
+  const password = document.getElementById('login_pass').value;
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { toast('Ошибка входа: ' + error.message, true); return; }
+  location.reload();
+}
+
+requireLogin();
+</script>
+</body>
+</html>
