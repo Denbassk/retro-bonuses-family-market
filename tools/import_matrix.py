@@ -12,7 +12,7 @@ SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-XLSX_PATH = Path(r"D:\РЕТРО_БОНУСЫ Фэмэли маркет\Ассортиментная матрица.xlsx")
+XLSX_PATH = Path(r"D:\РЕТРО_БОНУСЫ Фэмэли маркет\data\справочники\Ассортиментная матрица.xlsx")
 
 # ---------- нормализация ----------
 def normalize(s):

@@ -16,7 +16,7 @@ from collections import defaultdict
 
 # ─── .env ────────────────────────────────────────────────────────────────────
 def load_env():
-    env_path = Path(__file__).parent / ".env"
+    env_path = Path(__file__).resolve().parent.parent / ".env"
     if env_path.exists():
         with open(env_path, encoding="utf-8") as f:
             for line in f:
@@ -154,7 +154,7 @@ print(f"  Без brand alias:           {len(matched_no_brand):>5}   {matched_no
 print(f"  Не в алиасах:              {len(not_in_aliases):>5}   {not_in_sum:>16,.2f} грн  ({not_in_sum/total_purchase*100:.1f}%)")
 
 # 5. Сохранить CSV для удобства
-csv_path = Path(__file__).parent / "bq_supplier_audit.csv"
+csv_path = Path(__file__).resolve().parent.parent / "output" / "bq_supplier_audit.csv"
 import csv
 with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
     w = csv.writer(f, delimiter=";")

@@ -24,7 +24,7 @@ from collections import defaultdict
 
 # ─── .env ────────────────────────────────────────────────────────────────────
 def load_env():
-    env_path = Path(__file__).parent / ".env"
+    env_path = Path(__file__).resolve().parent.parent / ".env"
     if env_path.exists():
         with open(env_path, encoding="utf-8") as f:
             for line in f:
@@ -507,7 +507,7 @@ def main():
         csv_path = Path(sys.argv[1])
     else:
         # Ищем последний retro_results_*.csv
-        csv_files = sorted(Path(__file__).parent.glob("retro_results_*.csv"),
+        csv_files = sorted((Path(__file__).resolve().parent.parent / "output").glob("retro_results_*.csv"),
                           key=lambda f: f.stat().st_mtime, reverse=True)
         if not csv_files:
             print("Ошибка: не найден retro_results_*.csv")

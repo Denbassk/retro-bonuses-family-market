@@ -8,6 +8,7 @@ dump_cell_comments.py - вытаскивает примечания к ячей�
 """
 import re, csv, zipfile, argparse
 from pathlib import Path
+from paths import OUT
 from xml.etree import ElementTree as ET
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
@@ -128,7 +129,7 @@ def main():
         print("[!] Примечаний не найдено вообще.")
         return
 
-    out = Path(f"cell_comments_{args.sheet}.csv")
+    out = OUT / f"cell_comments_{args.sheet}.csv"
     with out.open("w", newline="", encoding="utf-8-sig") as fh:
         w = csv.DictWriter(fh, fieldnames=list(out_rows[0].keys()), delimiter=";")
         w.writeheader()

@@ -1,76 +1,44 @@
-# Данные и коммерческая информация
-*.xlsx
-*.xls
-*.csv
-payments/
-output/
-Коммерческие_условия_поставщиков_2026.html
-
-# Секреты
+# ── Секреты ──
 .env
 .env.*
+!.env.example
 credentials/
 *.pem
 *.key
 token.json
 
-# Мусор
+# ── Данные и коммерческая информация (в Git не идут) ──
+*.xlsx
+*.xls
+*.csv
+Ретро_Excel/
+data/
+payments/
+output/
+Бэкап/
+Коммерческие_условия_поставщиков_2026.html
+repomix-output.xml
+
+# ── Логи и выгрузки прогонов ──
+*.log
+_archive/*.txt
+analysis_*.txt
+check_*.txt
+zerno_skus.json
+
+# ── Мусор ──
 __pycache__/
 *.pyc
 .venv/
 venv/
-Бэкап/
 *.bak
 *.bak_*
-*.lnk
 ~$*
-*.log
 *.sqlite
 *.db
 .vscode/
 .idea/
 Thumbs.db
-
-# Логи и выгрузки прогонов
-analysis_*.txt
-check_*.txt
-Штрих-коды*.txt
-zerno_skus.json
-
-# Системный мусор Windows
 desktop.ini
 *.ico
 *.lnk
-
-# Логи и выгрузки прогонов
-analysis_*.txt
-check_*.txt
-Штрих-коды*.txt
-zerno_skus.json
-
-# Системный мусор Windows
-desktop.ini
-*.ico
-*.lnk
-
-retro_facts_*.csv
-
-name_review_*.csv
-
-note_components_*.csv
-
-facts_coverage_*.csv
-
-rules_snapshot.*
-
-bq_catalog.csv
-etalon_incoming_*.csv
-etalon_returns_*.csv
-
-bq_coverage.py
-
-bq_gaps.csv
-
-probe_gaps_result.csv
-
-gaps_classified.csv

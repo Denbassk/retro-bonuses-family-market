@@ -13,6 +13,7 @@ audit_facts_coverage.py - аудит покрытия фактов по всем
 """
 import re, csv, argparse
 from pathlib import Path
+from paths import OUT
 from collections import defaultdict
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
@@ -178,7 +179,7 @@ def main():
         for r in sorted(gaps, key=lambda x: -(x["calc"] or 0)):
             print(f"    {r['period']}  {r['supplier'][:38]:<38} начислено {r['calc']:>12,.2f}")
 
-    dst = Path(f"facts_coverage_{year}.csv")
+    dst = OUT / f"facts_coverage_{year}.csv"
     with dst.open("w", newline="", encoding="utf-8-sig") as fh:
         w = csv.DictWriter(fh, fieldnames=list(out[0].keys()), delimiter=";")
         w.writeheader()

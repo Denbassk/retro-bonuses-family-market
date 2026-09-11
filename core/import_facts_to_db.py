@@ -31,7 +31,7 @@ from dump_cell_comments import comments_from_zip
 NON_RETRO = ("дмп", "кубы", "кубі", "куби", "стойки", "стойка", "сгущёнка", "сгущенка")
 RANGE_RE = re.compile(r"\b([а-яіїєґ]{3,})\s*[-—]\s*([а-яіїєґ]{3,})\b", re.IGNORECASE)
 SRC = "excel_retro_sheet"
-EPS = 0.005
+EPS = 1.0  # Excel округлён до гривны: разница < 1 ₴ = совпадение
 
 
 def note_body(text):
@@ -161,7 +161,7 @@ def main():
                    "payment_date": (p["payment_date"].isoformat()
                                     if p["payment_date"] and not p["date_warning"] else None),
                    "notes": txt or None, "source_file": path.name, "import_source": SRC,
-                   "imported_at": now, "needs_manual": bool(flags),
+                   "imported_at": now, "needs_manual": bool(flags), "amount_previous": None,
                    "covers_periods": covers or None, "additional_payments": extra}
 
             prev = existing.get((sid, label))
@@ -190,6 +190,9 @@ def main():
     for per in sorted(byp):
         tot = sum(x[2]["amount_paid"] for x in byp[per])
         print(f"    {per}: {len(byp[per]):>2} шт, сумма {tot:>12,.0f}")
+        for cell, raw, rec in sorted(byp[per], key=lambda x: sup.get(x[2]["supplier_id"], "")):
+            print(f"        {cell:<6} {raw[:30]:<30} -> {sup.get(rec['supplier_id'], '?')[:34]:<34}"
+                  f" {rec['amount_paid']:>10,.0f}  {rec['payment_date'] or ''}")
 
     if conflict:
         print(f"\n[!] Конфликты — НЕ пишутся без --with-conflicts ({len(conflict)}):")

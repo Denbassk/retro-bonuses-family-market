@@ -23,7 +23,8 @@ from pathlib import Path
 # ─── Загрузка .env ────────────────────────────────────────────────────────────
 def load_env(env_path=None):
     if env_path is None:
-        env_path = Path(__file__).parent / ".env"
+        here = Path(__file__).resolve().parent
+        env_path = next((c for c in (here / ".env", here.parent / ".env") if c.exists()), here / ".env")
     if not env_path.exists():
         return
     with open(env_path, encoding="utf-8") as f:
@@ -46,11 +47,16 @@ BQ_PROJECT   = os.environ.get("BQ_PROJECT", "family-market-analytics")
 BQ_DATASET   = os.environ.get("BQ_DATASET", "family_market")
 
 # ─── Коэффициент subtract_vat_from_retro ─────────────────────────────────────
-# Текущее поведение (сохранено как есть): уменьшить начисление на 20%.
+# РЕШЕНО 11.09.2026: «минус 20%» = × 0.80 для всех правил с subtract_vat_from_retro (не ÷1.2).
 VAT_FACTOR = Decimal("0.80")
-# Если смысл поля — "выделить НДС из суммы С НДС", раскомментируй строку ниже
-# и закомментируй верхнюю. Разница в итоге ≈4,2% — это выше вашего порога 1,5%.
-# VAT_FACTOR = Decimal("1") / Decimal("1.2")   # 0.8333...
+
+
+def apply_vat(amount, rule):
+    """Вычет НДС из ретро: × VAT_FACTOR (0.80 = «минус 20%»), если у правила subtract_vat_from_retro.
+    Решение 11.09.2026: форма ×0.8 (Виналь сошёлся копейка в копейку). Округление до копейки."""
+    if not rule.get("subtract_vat_from_retro"):
+        return amount
+    return (amount * VAT_FACTOR).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 # ─── Supabase helpers ─────────────────────────────────────────────────────────
 def sb_get(table, params="", page_size=1000):
@@ -487,8 +493,7 @@ def calc_rule_per_portion(rule, aliases_for_rule, month_start, month_end, dry_ru
     retro = Decimal(str(total_cups)) * Decimal(str(price_per_cup))
     retro = retro.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    if rule.get("subtract_vat_from_retro"):
-        retro = (retro * Decimal("0.80")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    retro = apply_vat(retro, rule)
 
     bf = rule["bonus_form"]
     retro_vat = retro
@@ -510,8 +515,7 @@ def calc_rule_per_portion(rule, aliases_for_rule, month_start, month_end, dry_ru
             s_cups = s_qty * cups_per_kg
             s_retro = (Decimal(str(s_cups)) * Decimal(str(price_per_cup))).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP)
-            if rule.get("subtract_vat_from_retro"):
-                s_retro = (s_retro * Decimal("0.80")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            s_retro = apply_vat(s_retro, rule)
             sku_breakdown.append({
                 "barcode": s["barcode"],
                 "product_name": s.get("product_name") or "",
@@ -585,8 +589,7 @@ def calc_rule(rule, aliases_for_rule, month_start, month_end, dry_run=False, pay
         retro = Decimal(str(base)) * Decimal(str(pct)) / Decimal("100")
         retro = retro.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-        if rule.get("subtract_vat_from_retro"):
-            retro = (retro * Decimal("0.80")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        retro = apply_vat(retro, rule)
 
         note = "база = сума оплат за місяць"
         if excluded_incoming > 0:
@@ -675,8 +678,7 @@ def calc_rule(rule, aliases_for_rule, month_start, month_end, dry_run=False, pay
     retro = Decimal(str(base)) * Decimal(str(pct)) / Decimal("100")
     retro = retro.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    if rule.get("subtract_vat_from_retro"):
-        retro = (retro * Decimal("0.80")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    retro = apply_vat(retro, rule)
 
     bf = rule["bonus_form"]
     retro_vat = retro
@@ -721,8 +723,7 @@ def calc_rule(rule, aliases_for_rule, month_start, month_end, dry_run=False, pay
             net = in_amt - out["amount"]
             sku_retro = (Decimal(str(net)) * Decimal(str(pct)) / Decimal("100")
                         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            if rule.get("subtract_vat_from_retro"):
-                sku_retro = (sku_retro * Decimal("0.80")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            sku_retro = apply_vat(sku_retro, rule)
             sku_breakdown.append({
                 "barcode": bc,
                 "product_name": r.get("product_name") or "",
@@ -1316,7 +1317,7 @@ def run_calculation(months, supplier_rules, alias_by_supplier, alias_by_brand, r
         if not no_save:
             save_to_supabase(all_results, months, supplier_rules)
 
-        output_dir = Path(__file__).parent / "output"
+        output_dir = Path(__file__).resolve().parent.parent / "output"
         output_dir.mkdir(exist_ok=True)
         out_csv = csv_path or str(output_dir / f"retro_results_{months[0]}_{months[-1]}.csv")
         try:

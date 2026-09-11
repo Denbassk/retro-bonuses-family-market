@@ -22,7 +22,7 @@ from collections import defaultdict
 
 # ─── .env ────────────────────────────────────────────────────────────────────
 def load_env():
-    env_path = Path(__file__).parent / ".env"
+    env_path = Path(__file__).resolve().parent.parent / ".env"
     if env_path.exists():
         with open(env_path, encoding="utf-8") as f:
             for line in f:

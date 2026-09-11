@@ -11,6 +11,7 @@ dump_rules.py - выгрузка правил ретро в читаемый в�
 """
 import csv, argparse
 from pathlib import Path
+from paths import OUT
 from collections import defaultdict
 
 import sb
@@ -108,7 +109,7 @@ def main():
             lines.append(f"\n- *фикс-бонус* — " + "; ".join(parts))
         lines.append("")
 
-    Path("rules_snapshot.md").write_text("\n".join(lines), encoding="utf-8")
+    (OUT / "rules_snapshot.md").write_text("\n".join(lines), encoding="utf-8")
 
     flat = []
     for r in rules:
@@ -120,7 +121,7 @@ def main():
     if flat:
         keys = sorted({k for x in flat for k in x})
         keys = ["supplier", "brand"] + [k for k in keys if k not in ("supplier", "brand")]
-        with open("rules_snapshot.csv", "w", newline="", encoding="utf-8-sig") as fh:
+        with open(OUT / "rules_snapshot.csv", "w", newline="", encoding="utf-8-sig") as fh:
             w = csv.DictWriter(fh, fieldnames=keys, delimiter=";")
             w.writeheader()
             w.writerows(flat)

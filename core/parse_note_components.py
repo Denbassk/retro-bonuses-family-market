@@ -10,6 +10,7 @@ parse_note_components.py - разбор состава примечаний.
 """
 import re, csv, argparse
 from pathlib import Path
+from paths import OUT
 
 from parse_payment_notes import parse_note, AUTHOR_RE, DATE_RE, EARMARK_RE
 
@@ -157,7 +158,7 @@ def main():
         print(f"    {r['cell']:<6} {r['supplier_raw'][:26]:<26} ячейка={r['cell_amount']:>11,.0f} "
               f"«{r['note_body'][:55]}»")
 
-    dst = Path(f"note_components_{year}.csv")
+    dst = OUT / f"note_components_{year}.csv"
     with dst.open("w", newline="", encoding="utf-8-sig") as fh:
         w = csv.DictWriter(fh, fieldnames=list(out[0].keys()), delimiter=";")
         w.writeheader()

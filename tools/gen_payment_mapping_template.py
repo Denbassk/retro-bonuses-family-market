@@ -8,7 +8,7 @@ from openpyxl import load_workbook
 
 # Загрузка .env
 def load_env():
-    p = Path(__file__).parent / ".env"
+    p = Path(__file__).resolve().parent.parent / ".env"
     if not p.exists():
         return
     for line in p.read_text(encoding="utf-8").splitlines():
@@ -34,7 +34,7 @@ suppliers = sb_get("suppliers", "select=id,name&order=name")
 print(f"[i] Поставщиков в Supabase: {len(suppliers)}")
 
 # 2. Имена с листа «2026»
-xlsx = Path(__file__).parent / "Ретро Бонусы.xlsx"
+xlsx = Path(__file__).resolve().parent.parent / "Ретро_Excel" / "старые" / "Ретро Бонусы 2026-05-15.xlsx"
 wb = load_workbook(xlsx, data_only=True)
 ws = wb["2026"]
 
@@ -87,7 +87,7 @@ for ex_name in excel_names:
         }
 
 # 4. Сохраняем шаблон
-out = Path(__file__).parent / "payment_facts_mapping.template.json"
+out = Path(__file__).resolve().parent / "payment_facts_mapping.template.json"
 out.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # Статистика

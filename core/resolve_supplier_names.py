@@ -12,6 +12,7 @@ resolve_supplier_names.py - ЭТАП 2: сопоставление имён из
 """
 import re, csv, argparse
 from pathlib import Path
+from paths import OUT
 from difflib import SequenceMatcher
 from openpyxl import load_workbook
 
@@ -141,7 +142,7 @@ def main():
         stat[rec["status"]] += 1
         rows.append(rec)
 
-    out = Path(args.out or f"name_review_{args.sheet}.csv")
+    out = Path(args.out) if args.out else OUT / f"name_review_{args.sheet}.csv"
     with out.open("w", newline="", encoding="utf-8-sig") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()), delimiter=";")
         w.writeheader()

@@ -8,6 +8,7 @@ import_retro_facts.py - ЭТАП 1: чтение факт-таблицы рет�
 """
 import re, csv, argparse
 from pathlib import Path
+from paths import OUT
 from collections import defaultdict
 from openpyxl import load_workbook
 
@@ -135,7 +136,7 @@ def main():
     empty = sum(1 for f in facts if f["state"] == "empty")
     print(f"\n[i] Поставщиков: {len(seen)} | ячеек: значений {vals}, нулей {zeros}, пустых {empty}")
 
-    out = Path(args.out or f"retro_facts_{args.sheet}.csv")
+    out = Path(args.out) if args.out else OUT / f"retro_facts_{args.sheet}.csv"
     with out.open("w", newline="", encoding="utf-8-sig") as fh:
         w = csv.DictWriter(fh, fieldnames=list(facts[0].keys()))
         w.writeheader()

@@ -9,7 +9,7 @@ from pathlib import Path
 from collections import defaultdict
 
 # ─── .env ─────────────────────────────────────────────────────────────────────
-env_path = Path(__file__).parent / ".env"
+env_path = Path(__file__).resolve().parent.parent / ".env"
 if env_path.exists():
     with open(env_path, encoding="utf-8") as f:
         for line in f:
@@ -96,7 +96,7 @@ for brand, items in brands.items():
     if items:
         output[brand] = [it[0] for it in items]
 
-out_path = Path(__file__).parent / "zerno_skus.json"
+out_path = Path(__file__).resolve().parent.parent / "data" / "разборы" / "zerno_skus.json"
 with open(out_path, "w", encoding="utf-8") as f:
     json.dump(output, f, ensure_ascii=False, indent=2)
 print(f"\nСохранено в {out_path}")

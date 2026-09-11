@@ -294,7 +294,7 @@ def main():
                         help="Конкретные файлы через пробел")
     args = parser.parse_args()
 
-    payments_dir = Path(__file__).parent / "payments"
+    payments_dir = Path(__file__).resolve().parent.parent / "payments"
     if not payments_dir.exists():
         payments_dir.mkdir()
         print(f"Создана папка: {payments_dir}")

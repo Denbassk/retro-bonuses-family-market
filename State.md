@@ -59,7 +59,7 @@
 
 **Запуск:**
 - `run_retro.bat` — однокликовый, период 2026-01 до предыдущего месяца.
-- CLI: `python calculate_retro.py 2026-01 2026-04 --supplier "Виналь" --no-save --dry-run --verify`.
+- CLI: `python core\calculate_retro.py 2026-01 2026-04 --supplier "Виналь" --no-save --dry-run --verify`.
 - Интерактивное меню: 8 пунктов.
 
 **Логика резолвинга алиасов** (приоритет): brand-level → SKU-фильтр → fallback (средневзвешенный %).
@@ -159,31 +159,32 @@
 
 ---
 
-## 6. Файлы проекта
+## 6. Файлы проекта (структура с 11.09.2026)
 
 ```
 D:\РЕТРО_БОНУСЫ Фэмэли маркет
-├── calculate_retro.py        # v4: + subtract_vat_from_retro
-├── import_payments.py        # v2: + Tkinter диалог + bank_counterparty_map
-├── run_retro.bat
-├── menu_retro.bat
-├── admin.html                # CRUD + факт оплат ретро
-├── apps_script_retro.js      # Сводка + Детализация (с SKU) + Сверка (фикс %)
-├── fix_brand_aliases.py
-├── audit_bq_suppliers.py
-├── migrate_bq_to_supabase.py
-├── .env
-├── payments/*.xlsx           # банковские выписки
-├── retro_results_*.csv
-└── State.md
+├── CLAUDE.md, State.md       # память проекта и архитектура
+├── admin.html                # админка (остаётся в корне: её раздаёт start_admin.bat)
+├── start_admin.bat           # http://localhost:3000/admin.html
+├── menu_retro.bat, run_retro.bat  # интерактивное меню расчёта (ярлык «Расчет_ретро» -> run_retro.bat)
+├── core\                     # рабочий конвейер: запускать из корня, python core\<скрипт>.py
+│   ├── sb.py, paths.py       # доступ к Supabase (пагинация, батчи), единые пути
+│   ├── calculate_retro.py    # расчёт ретро
+│   ├── import_payments.py    # банковские выписки -> supplier_payments
+│   ├── import_retro_facts.py, dump_cell_comments.py, parse_payment_notes.py, parse_note_components.py  # разбор Excel
+│   ├── resolve_supplier_names.py, load_name_map.py, confirm_names.py   # маппинг имён
+│   ├── import_facts_to_db.py # Excel -> retro_payments_fact
+│   └── audit_facts_coverage.py, diagnose_retro.py, dump_rules.py
+├── tools\                    # разовые миграции/заливки справочников, шаблоны, Apps Script
+├── analysis\                 # разборы по конкретным поставщикам (СТВ, Монжар, Союз, зерновая)
+├── _archive\                 # probe-скрипты и их CSV (сверка слоя данных и т.п.)
+├── Ретро_Excel\              # СЮДА кладётся выгрузка «Ретро Бонусы»; старые\ - прошлые версии
+├── data\справочники\         # Маппинг имен.xlsx, Ассортиментная матрица, коммерческие условия
+├── data\разборы\             # результаты разборов (xlsx, txt)
+├── payments\                 # банковские выписки
+├── output\                   # всё, что генерируют скрипты core\ (CSV, rules_snapshot.md)
+├── credentials\, Бэкап\       # ключи; .bak и копии
 ```
-
-**Внешние ресурсы:**
-- Supabase: `https://mcqljkyllkziqsuhuxqd.supabase.co`. Service key в `.env`.
-- BigQuery: `family-market-analytics`. Датасеты: `family_market`, `analytics_reports`.
-- Google Sheet: листы «Сводка», «Детализация», «Сверка».
-
----
 
 ## 7. Что сделано в сессии 2026-05-19/20
 
@@ -237,22 +238,22 @@ D:\РЕТРО_БОНУСЫ Фэмэли маркет
 cd "D:\РЕТРО_БОНУСЫ Фэмэли маркет"
 
 # Полный пересчёт за все месяцы 2026
-python calculate_retro.py 2026-01 2026-04
+python core\calculate_retro.py 2026-01 2026-04
 
 # По одному поставщику без сохранения
-python calculate_retro.py 2026-01 2026-04 --supplier "Виналь" --no-save
+python core\calculate_retro.py 2026-01 2026-04 --supplier "Виналь" --no-save
 
 # Интерактивное меню
-python calculate_retro.py
+python core\calculate_retro.py
 
 # Импорт оплат — откроется диалог выбора файлов
-python import_payments.py
+python core\import_payments.py
 
 # Импорт всех файлов из payments/
-python import_payments.py --all
+python core\import_payments.py --all
 
 # Импорт конкретных файлов
-python import_payments.py --files "payments/АСК.xlsx" "payments/Виналь.xlsx"
+python core\import_payments.py --files "payments/АСК.xlsx" "payments/Виналь.xlsx"
 
 # Однокликовый запуск
 run_retro.bat
