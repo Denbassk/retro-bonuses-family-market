@@ -133,6 +133,9 @@ def main():
     ap.add_argument("--supplier")
     ap.add_argument("--period")
     ap.add_argument("--docs", action="store_true")
+    ap.add_argument("--from-period", default="2026-01")
+    ap.add_argument("--to-period", default="2026-08",
+                    help="верхняя граница окна сверки; сентябрь не закрыт")
     a = ap.parse_args()
 
     if a.docs:
@@ -154,7 +157,8 @@ def main():
         return
 
     # ── приходы ──────────────────────────────────────────────────────────
-    inc = agg_incoming(a.year)
+    inc = [r for r in agg_incoming(a.year)
+           if a.from_period <= (r["per"] or "") <= a.to_period]
     if a.supplier:
         inc = [r for r in inc if a.supplier.lower() in (r["supplier"] or "").lower()]
     if a.period:
@@ -189,7 +193,8 @@ def main():
         print(f"[!] Есть у нас, НЕТ в эталоне ({len(only_o)}): {', '.join(only_o[:12])}")
 
     # ── возвраты ─────────────────────────────────────────────────────────
-    ret = agg_returns(a.year)
+    ret = [r for r in agg_returns(a.year)
+           if a.from_period <= (r["per"] or "") <= a.to_period]
     if a.supplier:
         ret = [r for r in ret if a.supplier.lower() in (r["supplier"] or "").lower()]
     if a.period:
@@ -234,3 +239,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
