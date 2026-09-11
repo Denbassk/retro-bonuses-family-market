@@ -18,7 +18,9 @@ from openpyxl import load_workbook
 import sb
 from import_retro_facts import norm_name, STOP_NAMES
 
-NOISE = ("от оплат", "от оплаты", "от оплати", "кроме", "крім")
+NOISE = ("от оплат", "от оплаты", "от оплати", "кроме олейна", "кроме", "крім")
+STOPWORDS = {"тов", "пп", "фоп", "тд", "пк", "лтд", "ltd", "дистрибуции",
+             "дистрибуції", "дистрибьюция", "групп", "group", "компания", "компані"}
 
 
 def split_name(nm):
@@ -28,23 +30,45 @@ def split_name(nm):
     for n in NOISE:
         base = base.replace(n, " ")
         brands = brands.replace(n, " ")
-    tidy = lambda s: re.sub(r"\s+", " ", s).strip(" ,.-")
-    return tidy(base), tidy(brands)
+    tidy = lambda s: re.sub(r"[^\w\s]", " ", s)
+    tidy2 = lambda s: re.sub(r"\s+", " ", tidy(s)).strip()
+    return tidy2(base), tidy2(brands)
+
+
+def tokens(s):
+    return [t for t in s.split() if len(t) > 1 and t not in STOPWORDS]
+
+
+def base_score(ex_base, db_base):
+    """Совпадение по словам важнее посимвольного сходства."""
+    a, b = tokens(ex_base), tokens(db_base)
+    if not a or not b:
+        return SequenceMatcher(None, ex_base, db_base).ratio()
+    sa, sb_ = set(a), set(b)
+    if sa <= sb_ or sb_ <= sa:
+        ratio = min(len(sa), len(sb_)) / max(len(sa), len(sb_))
+        s = 0.85 + 0.15 * ratio
+        if a[0] == b[0]:
+            s = min(1.0, s + 0.05)
+        return s
+    common = sa & sb_
+    if common:
+        return 0.55 + 0.30 * (len(common) / max(len(sa), len(sb_)))
+    return SequenceMatcher(None, ex_base, db_base).ratio() * 0.75
 
 
 def score(ex, db):
-    """0..1. База важнее, но совпадение бренда в скобках сильно поднимает."""
+    """0..1. База - 65%, скобки - 35%. Отсутствие скобок с одной стороны нейтрально."""
     eb, ebr = split_name(ex)
     db_, dbr = split_name(db)
-    s = SequenceMatcher(None, eb, db_).ratio() * 0.55
+    bs = base_score(eb, db_)
     if ebr and dbr:
-        r = SequenceMatcher(None, ebr, dbr).ratio()
-        s += r * 0.45
-        if ebr == dbr or ebr in dbr or dbr in ebr:
-            s = min(1.0, s + 0.15)
-    elif not ebr and not dbr:
-        s += 0.45
-    return round(s, 3)
+        br = SequenceMatcher(None, ebr, dbr).ratio()
+        if set(tokens(ebr)) & set(tokens(dbr)):
+            br = max(br, 0.85)
+    else:
+        br = 0.5
+    return round(0.65 * bs + 0.35 * br, 3)
 
 
 def main():
@@ -127,8 +151,6 @@ def main():
     for k, v in stat.items():
         print(f"    {k:<13} {v}")
     print(f"\n[>] {out}")
-    print("    Откройте в Excel. Для REVIEW/NO_CANDIDATE впишите нужный id")
-    print("    в колонку decision_supplier_id (или IGNORE, если это не поставщик).")
 
 
 if __name__ == "__main__":
