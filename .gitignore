@@ -66,3 +66,7 @@ rules_snapshot.*
 bq_catalog.csv
 etalon_incoming_*.csv
 etalon_returns_*.csv
+
+bq_coverage.py
+
+bq_gaps.csv
