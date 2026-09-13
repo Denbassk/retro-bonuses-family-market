@@ -143,7 +143,65 @@ def supplier_month(D, sid, per, ctx, sku_calc, brands, sup):
     return rows
 
 
-NAMES = {}   # баркод -> наименование из SKU-разбивки расчётов (в BQ-агрегате названий нет)
+NAMES = {}              # баркод -> наименование из SKU-разбивки расчётов
+DETAILS_WITH_SKU = set()  # id строк расчёта, у которых есть SKU-разбивка (остальные - оплаты, фикс-бонус, доплаты)
+
+
+def control(D, rows, sids, pers, sku_calc, sup):
+    """Контроль по парам: отчёт против SKU-разбивки и против total_retro; «недосчитано» с флагами и без."""
+    rep = defaultdict(float)
+    for r in rows:
+        rep[(r[1], r[0])] += r[14]
+    bad = []
+    for s in sids:
+        for p in pers:
+            ctrl = round(sum(v["retro_amount"] for k, v in sku_calc.items() if k[0] == s and k[1] == p), 2)
+            d = round(rep.get((sup.get(s), p), 0.0) - ctrl, 2)
+            if abs(d) >= 0.01:
+                bad.append((sup.get(s), p, d))
+    print("\n[1] отчёт против retro_calculation_sku_details: " +
+          ("расхождений нет по всем парам" if not bad else f"расхождения в {len(bad)} парах"))
+    for n, p, d in sorted(bad, key=lambda x: -abs(x[2]))[:15]:
+        print(f"    {p} {n[:34]:<35} {d:+,.2f}")
+
+    print("\n[2] total_retro минус строки без SKU-разбивки против суммы SKU (порог 100 ₴):")
+    hits = 0
+    for s in sids:
+        for p in pers:
+            c = D.calc.get((s, p))
+            if not c:
+                continue
+            dets = D.details.get(c["id"], [])
+            no_sku = sum(f2(d["retro_amount"]) for d in dets if d["id"] not in DETAILS_WITH_SKU)
+            sku = round(sum(v["retro_amount"] for k, v in sku_calc.items() if k[0] == s and k[1] == p), 2)
+            diff = round(f2(c["total_retro"]) - no_sku - sku, 2)
+            if abs(diff) > 100:
+                hits += 1
+                # ретро в SKU-разбивке считается ДО вычета возвратов, возвраты вычитаются на уровне строки расчёта
+                ret_eff = sum(f2(d["amount_returned"]) * d.get("_rate", 0) for d in dets)
+                why = ("возвраты вычтены на уровне строки расчёта, в SKU-разбивке их нет"
+                       if ret_eff and abs(abs(diff) - ret_eff) <= max(1.0, 0.05 * ret_eff)
+                       else "дрейф округления при распределении возвратов" if abs(diff) < 0.01 * (sku or 1)
+                       else "строка расчёта без SKU-разбивки (проверить detail)")
+                print(f"    {p} {sup.get(s, '?')[:34]:<35} total {f2(c['total_retro']):>12,.2f} - без SKU {no_sku:>11,.2f}"
+                      f" - SKU {sku:>12,.2f} = {diff:>+10,.2f}  {why}")
+    if not hits:
+        print("    разниц больше 100 ₴ нет")
+
+    flags = {}
+    for r in rows:
+        flags[(r[1], r[0])] = bool("недогруз" in r[18] or "задвоено" in r[18])
+    grp = defaultdict(lambda: defaultdict(float))
+    for r in rows:
+        if r[15]:
+            grp["с флагами" if flags[(r[1], r[0])] else "без флагов"][r[10].split(";")[0]] += r[15]
+    print("\n[3-4] «недосчитано» по группам пар:")
+    for g in ("без флагов", "с флагами"):
+        tot = sum(grp[g].values())
+        n = sum(1 for k, v in flags.items() if v == (g == "с флагами"))
+        print(f"    {g} ({n} пар): итого {tot:,.0f} ₴")
+        for st, v in sorted(grp[g].items(), key=lambda x: -x[1]):
+            print(f"        {st[:40]:<42}{v:>12,.0f}")
 
 
 def main():
@@ -153,6 +211,7 @@ def main():
     ap.add_argument("--from", dest="per_from", default="2026-01")
     ap.add_argument("--to", dest="per_to", default=None)
     ap.add_argument("--dry-run", action="store_true", help="посчитать и показать итоги, CSV не писать")
+    ap.add_argument("--control", action="store_true", help="контроль по парам: сверка сумм и «недосчитано» по флагам")
     a = ap.parse_args()
     sids, pers, brands, sup = scope(a.supplier, a.month or a.per_from, a.month or a.per_to)
     targets = [{"members": (s,), "per": p} for s in sorted(sids) for p in pers]
@@ -173,6 +232,7 @@ def main():
         for f in ("quantity", "amount_purchased", "amount_returned", "retro_amount"):
             cur[f] = round(cur[f] + f2(r.get(f)), 2)
         NAMES.setdefault(str(r["barcode"]), r.get("product_name") or "")
+        DETAILS_WITH_SKU.add(r["detail_id"])
 
     rows = []
     for s in sorted(sids, key=lambda x: sup.get(x, "")):
@@ -203,6 +263,8 @@ def main():
         print(f"    {'месяц':<8}{'поставщик':<28}{'баркод':<15}{'наименование':<40}{'статус':<26}{'недосчитано':>12}")
         for r in top:
             print(f"    {r[0]:<8}{r[1][:27]:<28}{str(r[4]):<15}{(r[5] or '')[:38]:<40}{r[10][:25]:<26}{r[15]:>12,.0f}")
+    if a.control:
+        control(D, rows, sids, pers, sku_calc, sup)
     done = sum(r[14] for r in rows)
     ctrl = sum(v["retro_amount"] for k, v in sku_calc.items() if k[0] in sids and k[1] in pers)
     calc_total = sum(f2(D.calc[(s, p)]["total_retro"]) for s in sids for p in pers if (s, p) in D.calc)
