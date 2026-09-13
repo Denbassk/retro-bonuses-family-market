@@ -15,8 +15,11 @@ API:
   POST /api/reconcile              пересверить без загрузки
   GET  /api/jobs/<id>              ход сверки
   GET  /api/data-health            светофор по данным: агрегат output\\data_health_2026.csv (bq_docs.health)
+  GET  /api/sku-coverage           позиционный отчёт: output\\sku_coverage_2026.csv (tools\\sku_coverage.py)
+                                   ?view=summary|pair|top&supplier=&month=
 """
 import os, sys, csv, json, time, uuid, hashlib, threading, subprocess, urllib.request, urllib.parse
+from collections import defaultdict
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -103,6 +106,77 @@ def data_health(retro_only=True):
             "updated": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat(timespec="minutes"),
             "months": [months[k] for k in sorted(months)],
             "top": sorted(rows, key=lambda x: -abs(x["delta"]))[:8]}
+
+
+_sku_cache = {"mtime": None, "rows": None}
+SKU_NO_ESTIMATE = "покрыт правилом другого поставщика"   # оценка «недосчитано» там невалидна
+SKU_KINDS = ("вне правил", "сырьё", "исключён правилом")
+
+
+def _sku_rows():
+    """Строки позиционного отчёта из output\\sku_coverage_2026.csv (пишет tools\\sku_coverage.py). Кеш по mtime."""
+    p = OUT / "sku_coverage_2026.csv"
+    if not p.exists():
+        return None, None
+    m = p.stat().st_mtime
+    if _sku_cache["mtime"] != m:
+        with p.open(encoding="utf-8-sig", newline="") as fh:
+            _sku_cache["rows"] = list(csv.DictReader(fh, delimiter=";"))
+        _sku_cache["mtime"] = m
+    return _sku_cache["rows"], p
+
+
+def sku_coverage(view="summary", supplier=None, month=None):
+    """Позиционный отчёт для админки. Ничего не считает: читает готовый CSV (BigQuery не трогаем).
+    view: summary - сводка поставщик x месяц; pair - позиции одной пары; top - топ-50 без флагов месяца."""
+    rows, p = _sku_rows()
+    if rows is None:
+        return {"ok": False, "error": "отчёта ещё нет - запустите: python tools\\sku_coverage.py"}
+    num = lambda r, k: float(r[k] or 0)
+    head = {"ok": True, "file": p.name, "truth_until": "2026-06",
+            "updated": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat(timespec="minutes")}
+    if view == "pair":
+        sel = [r for r in rows if r["поставщик"] == supplier and r["месяц"] == month]
+        sel.sort(key=lambda r: (-num(r, "недосчитано"), -num(r, "приход")))
+        head["rows"] = [{"bc": r["баркод"], "name": r["наименование"], "brand": r["бренд"], "status": r["статус покрытия"],
+                         "rule": r["правило"], "period": r["период правила"], "rate": r["ставка %"],
+                         "qty": r["количество"], "inc": num(r, "приход"), "ret": num(r, "возвраты"),
+                         "base": num(r, "база"), "retro": num(r, "ретро посчитано"),
+                         "under": num(r, "недосчитано") if not r["статус покрытия"].startswith(SKU_NO_ESTIMATE) else None,
+                         "drift": r["дрейф"]} for r in sel[:800]]
+        head["total"] = len(sel)
+        head["flags"] = sel[0]["флаги месяца"] if sel else ""
+        return head
+    agg = {}
+    for r in rows:
+        k = (r["поставщик"], r["месяц"])
+        a = agg.setdefault(k, {"supplier": r["поставщик"], "per": r["месяц"], "base": 0.0, "retro": 0.0,
+                               "under": {x: 0.0 for x in SKU_KINDS}, "n": defaultdict(int),
+                               "flags": r["флаги месяца"], "rows": 0})
+        st = r["статус покрытия"].split(";")[0]
+        a["rows"] += 1
+        a["base"] += num(r, "база")
+        a["retro"] += num(r, "ретро посчитано")
+        a["n"][st] += 1
+        if st in SKU_KINDS and not r["статус покрытия"].startswith(SKU_NO_ESTIMATE):
+            a["under"][st] += num(r, "недосчитано")
+    for a in agg.values():
+        a["base"], a["retro"] = round(a["base"], 2), round(a["retro"], 2)
+        a["under"] = {k: round(v, 2) for k, v in a["under"].items()}
+        a["n"] = dict(a["n"])
+        a["flagged"] = ("недогруз" in a["flags"]) or ("задвоено" in a["flags"])
+        a["truth"] = a["per"] <= head["truth_until"]
+    if view == "top":
+        ok_pairs = {k for k, a in agg.items() if not a["flagged"]}
+        sel = [r for r in rows if (r["поставщик"], r["месяц"]) in ok_pairs and num(r, "недосчитано") > 0
+               and not r["статус покрытия"].startswith(SKU_NO_ESTIMATE)]
+        sel.sort(key=lambda r: -num(r, "недосчитано"))
+        head["rows"] = [{"per": r["месяц"], "supplier": r["поставщик"], "bc": r["баркод"], "name": r["наименование"],
+                         "status": r["статус покрытия"], "under": num(r, "недосчитано"),
+                         "inc": num(r, "приход"), "truth": r["месяц"] <= head["truth_until"]} for r in sel[:50]]
+        return head
+    head["pairs"] = sorted(agg.values(), key=lambda a: (a["per"], -sum(a["under"].values())))
+    return head
 
 
 def store_file(data, filename):
@@ -198,6 +272,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(401, {"error": "нужен вход в админку"})
             scope = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("scope", ["retro"])[0]
             return self.send_json(200, data_health(retro_only=scope != "all"))
+        if path == "/api/sku-coverage":
+            if not self.who():
+                return self.send_json(401, {"error": "нужен вход в админку"})
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            return self.send_json(200, sku_coverage(view=q.get("view", ["summary"])[0],
+                                                    supplier=q.get("supplier", [None])[0],
+                                                    month=q.get("month", [None])[0]))
         if path.startswith("/api/jobs/"):
             if not self.who():
                 return self.send_json(401, {"error": "нужен вход в админку"})

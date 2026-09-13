@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT / "core"))
 import sb
 from paths import OUT
 import bq_docs
-from diagnose_retro import Data, rule_active, pair_context, in_chunks, f2
+from diagnose_retro import Data, rule_active, pair_context, in_chunks, f2, bounds
 from calculate_retro import apply_vat
 from reconcile_facts import months, last_closed
 
@@ -83,8 +83,12 @@ def supplier_month(D, sid, per, ctx, sku_calc, brands, sup):
     ret = D.bq_barcodes("ret", sid, per)
     act = [r for r in D.rules_by_sup[sid] if rule_active(r, per)]
     excluded = {str(b) for r in act for b in (r.get("excluded_sku_barcodes") or [])}
+    a_day, b_day = bounds(per)
+    # правило может быть неактивно по двум разным причинам, и это разные выводы:
+    notyet = {str(b): r for r in D.rules_by_sup[sid] if not rule_active(r, per)
+              and r.get("valid_from") and str(r["valid_from"]) > str(b_day) for b in (r.get("sku_barcodes") or [])}
     expired = {str(b): r for r in D.rules_by_sup[sid] if not rule_active(r, per)
-               for b in (r.get("sku_barcodes") or [])}
+               and r.get("valid_to") and str(r["valid_to"]) < str(a_day) for b in (r.get("sku_barcodes") or [])}
     no_income = act and all((r.get("retro_base_type") in NO_INCOME_BASE)
                             or (r.get("income_source") == "torgsoft_ref") for r in act)
     subtract = {r["id"] for r in act if (r.get("returns_policy") or "") == "subtract"}
@@ -115,9 +119,10 @@ def supplier_month(D, sid, per, ctx, sku_calc, brands, sup):
             status = "сырьё"
         elif bc in excluded:
             status = "исключён правилом"
+        elif bc in notyet:
+            status = f"правило ещё не действует с {notyet[bc].get('valid_from')}"
         elif bc in expired:
-            r = expired[bc]
-            status = f"правило истекло {r.get('valid_to') or ''}".strip()
+            status = f"правило истекло {expired[bc].get('valid_to')}"
         elif not act:
             status = "нет активных правил в месяце"
         else:
@@ -128,7 +133,8 @@ def supplier_month(D, sid, per, ctx, sku_calc, brands, sup):
         rate = f2(rule.get("retro_min")) if mine else (f2(rep.get("retro_min")) if rep else 0.0)
         under = ""   # у покрытых ретро уже посчитано; у баз не от приходов приход - не база
         # у «чужих» SKU (общий алиас, БІР Кег/Славутич) ретро уже посчитано у другого поставщика - не считать
-        if not mine and not others and base > 0 and rate and not no_income:
+        # «ещё не действует» - не недосчёт: договор в этом месяце не работал
+        if not mine and not others and base > 0 and rate and not no_income and not status.startswith("правило ещё не"):
             under = float(apply_vat(Decimal(str(round(base, 2))) * Decimal(str(rate)) / Decimal("100"), rep or {}))
         rows.append([
             per, sup.get(sid, "?"), ", ".join(sorted(names_in)),
