@@ -196,14 +196,15 @@ class Data:
 
         T = lambda t: f"`{PROJ}.{DS}.{t}`"
         out = {"inc": defaultdict(float), "inc_last3": defaultdict(float), "raw": defaultdict(float),
-               "ret": defaultdict(float), "et_inc": defaultdict(float), "et_ret": defaultdict(float)}
+               "ret": defaultdict(float), "et_inc": defaultdict(float), "et_ret": defaultdict(float), "names": {}}
         for r in run(f"""SELECT supplier, FORMAT_DATE('%Y-%m', doc_date) per, CAST(barcode AS STRING) bc,
                    REGEXP_CONTAINS(LOWER(IFNULL(product_name, '')), r'^сырье') raw,
                    EXTRACT(DAY FROM doc_date) > EXTRACT(DAY FROM LAST_DAY(doc_date)) - 3 last3,
-                   SUM(amount_purchase) amt
+                   SUM(amount_purchase) amt, ANY_VALUE(product_name) nm
                  FROM {T('incoming_transactions')}
                  WHERE supplier IN UNNEST(@n) AND doc_date BETWEEN @d1 AND @d2 GROUP BY 1,2,3,4,5""", names_in):
             k = (r["supplier"].strip(), r["per"], r["bc"])
+            out["names"].setdefault(r["bc"], r["nm"] or "")
             if r["raw"]:
                 out["raw"][k] += f2(r["amt"])
             else:
@@ -211,9 +212,10 @@ class Data:
                 if r["last3"]:
                     out["inc_last3"][k] += f2(r["amt"])
         for r in run(f"""SELECT supplier, FORMAT_DATE('%Y-%m', doc_date) per, CAST(barcode AS STRING) bc,
-                   SUM(amount_purchase) amt FROM {T('outgoing_to_supplier_transactions')}
+                   SUM(amount_purchase) amt, ANY_VALUE(product_name) nm FROM {T('outgoing_to_supplier_transactions')}
                  WHERE supplier IN UNNEST(@n) AND doc_date BETWEEN @d1 AND @d2 GROUP BY 1,2,3""", names_ret):
             out["ret"][(r["supplier"].strip(), r["per"], r["bc"])] += f2(r["amt"])
+            out["names"].setdefault(r["bc"], r["nm"] or "")
         for r in run(f"""SELECT supplier, FORMAT_DATE('%Y-%m', doc_date) per, SUM(amount) amt
                  FROM {T('torgsoft_incoming_ref_2026')}
                  WHERE supplier IN UNNEST(@n) AND doc_date BETWEEN @d1 AND @d2 GROUP BY 1,2""", names_in):

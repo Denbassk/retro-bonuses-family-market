@@ -127,12 +127,13 @@ def supplier_month(D, sid, per, ctx, sku_calc, brands, sup):
 
         rate = f2(rule.get("retro_min")) if mine else (f2(rep.get("retro_min")) if rep else 0.0)
         under = ""   # у покрытых ретро уже посчитано; у баз не от приходов приход - не база
-        if not mine and base > 0 and rate and not no_income:
+        # у «чужих» SKU (общий алиас, БІР Кег/Славутич) ретро уже посчитано у другого поставщика - не считать
+        if not mine and not others and base > 0 and rate and not no_income:
             under = float(apply_vat(Decimal(str(round(base, 2))) * Decimal(str(rate)) / Decimal("100"), rep or {}))
         rows.append([
             per, sup.get(sid, "?"), ", ".join(sorted(names_in)),
             brands.get(rule.get("supplier_brand_id"), {}).get("name", ""), bc,
-            (c or {}).get("product_name") or NAMES.get(bc, ""),
+            (c or {}).get("product_name") or D.bq.get("names", {}).get(bc) or NAMES.get(bc, ""),
             (c or {}).get("quantity", ""), round(amount, 2), round(returns, 2), round(base, 2), status,
             (rule.get("notes") or "")[:60] if mine else ((rep or {}).get("notes") or "")[:60],
             f"{rule.get('valid_from') or ''}..{rule.get('valid_to') or ''}" if mine else "",
@@ -192,6 +193,16 @@ def main():
     print(f"    {'статус покрытия':<42}{'строк':>7}{'приход':>14}{'ретро':>12}{'недосчитано':>14}")
     for st, v in sorted(by.items(), key=lambda x: -x[1][3]):
         print(f"    {st[:42]:<42}{v[0]:>7}{v[1]:>14,.0f}{v[2]:>12,.0f}{v[3]:>14,.0f}")
+    pairs = {(r[1], r[0]) for r in rows}
+    flagged = {(r[1], r[0]) for r in rows if "недогруз" in r[18] or "задвоено" in r[18]}
+    print(f"\n[i] пар поставщик-месяц: {len(pairs)}, из них с флагами данных (задвоено/недогруз): {len(flagged)}"
+          f" - «недосчитано» по ним читать с поправкой")
+    top = sorted([r for r in rows if r[15]], key=lambda r: -r[15])[:10]
+    if top:
+        print(f"\n[i] Топ-10 по «недосчитано»:")
+        print(f"    {'месяц':<8}{'поставщик':<28}{'баркод':<15}{'наименование':<40}{'статус':<26}{'недосчитано':>12}")
+        for r in top:
+            print(f"    {r[0]:<8}{r[1][:27]:<28}{str(r[4]):<15}{(r[5] or '')[:38]:<40}{r[10][:25]:<26}{r[15]:>12,.0f}")
     done = sum(r[14] for r in rows)
     ctrl = sum(v["retro_amount"] for k, v in sku_calc.items() if k[0] in sids and k[1] in pers)
     calc_total = sum(f2(D.calc[(s, p)]["total_retro"]) for s in sids for p in pers if (s, p) in D.calc)
