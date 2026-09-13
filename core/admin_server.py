@@ -14,15 +14,16 @@ API:
   POST /api/imports/<id>/cancel
   POST /api/reconcile              пересверить без загрузки
   GET  /api/jobs/<id>              ход сверки
+  GET  /api/data-health            светофор по данным: агрегат output\\data_health_2026.csv (bq_docs.health)
 """
-import os, sys, json, time, uuid, hashlib, threading, subprocess, urllib.request, urllib.parse
+import os, sys, csv, json, time, uuid, hashlib, threading, subprocess, urllib.request, urllib.parse
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sb
-from paths import ROOT, EXCEL_DIR
+from paths import ROOT, OUT, EXCEL_DIR
 from import_facts_to_db import build_plan, apply_plan, note_body
 
 HOST, PORT = "127.0.0.1", int(os.environ.get("ADMIN_PORT", "3000"))
@@ -73,6 +74,30 @@ def plan_to_json(plan):
     return {"file": plan["file"], "control": plan["control"], "same": plan["same"], "rows": rows,
             "openings": openings, "spread": spread, "unmapped": plan["unmapped"], "skipped": plan["skipped"],
             "manual": [m[0] for m in plan["manual"]]}
+
+
+def data_health():
+    """Светофор по данным: агрегат последнего отчёта bq_docs.health() (output\\data_health_2026.csv).
+    Ничего не считает заново - отчёт пишется в конце reconcile_facts.py --apply."""
+    p = OUT / "data_health_2026.csv"
+    if not p.exists():
+        return {"ok": False, "error": "отчёта ещё нет - запустите «⟳ Пересверить»"}
+    months, rows = {}, []
+    with p.open(encoding="utf-8-sig", newline="") as fh:
+        for r in csv.DictReader(fh, delimiter=";"):
+            kind, per, typ = r["вид"], r["месяц"], r["тип"]
+            n, d = int(r["документов"] or 0), float(r["эталон - наши"] or 0)
+            t = months.setdefault(per, {"per": per, "inc": {}, "ret": {}})[kind].setdefault(
+                typ, {"ru": r["тип_ru"], "n": 0, "delta": 0.0})
+            t["n"] += n
+            t["delta"] = round(t["delta"] + d, 2)
+            if r["в ретро"]:
+                rows.append({"kind": kind, "per": per, "supplier": r["поставщик BQ"], "type": typ, "ru": r["тип_ru"],
+                             "docs": n, "delta": round(d, 2), "sample": (r["примеры"] or "")[:160]})
+    return {"ok": True, "file": p.name,
+            "updated": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat(timespec="minutes"),
+            "months": [months[k] for k in sorted(months)],
+            "top": sorted(rows, key=lambda x: -abs(x["delta"]))[:8]}
 
 
 def store_file(data, filename):
@@ -163,6 +188,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/ping":
             return self.send_json(200, {"ok": True})
+        if path == "/api/data-health":
+            if not self.who():
+                return self.send_json(401, {"error": "нужен вход в админку"})
+            return self.send_json(200, data_health())
         if path.startswith("/api/jobs/"):
             if not self.who():
                 return self.send_json(401, {"error": "нужен вход в админку"})

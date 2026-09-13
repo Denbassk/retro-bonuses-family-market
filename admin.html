@@ -304,6 +304,7 @@ async function switchToImport() {
     <input type="file" id="imp-file" accept=".xlsx" style="font-size:13px;color:var(--text)">
     <button class="btn btn-primary" onclick="uploadRetroExcel()">Разобрать файл</button>
     <button class="btn btn-ghost" onclick="runReconcileOnly()" title="Сверить факты с расчётом без загрузки файла">⟳ Пересверить</button>
+    <button class="btn btn-ghost" onclick="showDataHealth()" title="Полнота базы: документы BigQuery против эталона Торгсофт">🚦 Данные</button>
     <span class="count-badge" id="count-badge"></span>`;
   const wrap = document.getElementById('table-wrap');
   if (importDraft) { renderImportDraft(); return; }          // вернулись с другой вкладки - черновик на месте
@@ -315,6 +316,55 @@ async function switchToImport() {
   wrap.innerHTML = '<div class="loading">Выберите файл Excel и нажмите «Разобрать файл».</div>';
   try { await apiFetch('/api/ping'); }
   catch (e) { wrap.innerHTML = `<div class="loading" style="color:var(--red)">${escHtml(e.message)}</div>`; }
+}
+
+// ── Светофор по данным: показывает последний отчёт bq_docs.health() (CSV), сам ничего не считает ──
+const DH_TYPES = { missing: 'нет у нас (недогруз)', double: 'задвоено у нас', amount: 'сумма документа другая',
+                   date: 'дата в другом месяце', number: 'номер другой', extra: 'нет в эталоне',
+                   et_double: 'задвоено в эталоне (у нас верно)' };
+
+function dhKind(t) {
+  const own = Object.entries(t || {}).filter(([k]) => k !== 'et_double')
+    .sort((a, b) => Math.abs(b[1].delta) - Math.abs(a[1].delta));
+  const sum = own.reduce((s, x) => s + x[1].delta, 0);
+  const bad = (t.missing ? t.missing.n : 0) + (t.double ? t.double.n : 0);
+  const light = !own.length ? ['🟢', 'var(--green)'] : (bad || Math.abs(sum) >= 50000 ? ['🔴', 'var(--red)'] : ['🟡', 'var(--orange)']);
+  return { icon: light[0], color: light[1], sum,
+           txt: own.map(x => `${DH_TYPES[x[0]] || x[0]}: ${x[1].n} док. ${fmt(x[1].delta)}`).join('; ') || 'совпадает с эталоном' };
+}
+
+async function showDataHealth() {
+  const wrap = document.getElementById('table-wrap');
+  wrap.innerHTML = '<div class="loading">Читаю отчёт по данным…</div>';
+  let d;
+  try { d = await apiFetch('/api/data-health'); }
+  catch (e) { wrap.innerHTML = `<div class="loading" style="color:var(--red)">${escHtml(e.message)}</div>`; return; }
+  if (!d.ok) { wrap.innerHTML = `<div class="loading" style="color:var(--orange)">${escHtml(d.error)}</div>`; return; }
+  let h = `<div style="padding:10px 16px;background:var(--surface2);border-radius:8px;margin:12px 0;font-size:13px">
+    <b>🚦 Полнота базы: документы BigQuery против эталона Торгсофт</b> — 🔴 есть недогруз или задвоение,
+    расчёт за месяц считать рано; 🟡 мелкие расхождения сумм; 🟢 всё сходится.
+    <div style="color:var(--text2);margin-top:4px">отчёт ${escHtml(d.file)} от
+    ${escHtml((d.updated || '').slice(0, 16).replace('T', ' '))} — обновляется при сверке, месяцев без эталона в нём нет</div></div>`;
+  h += `<table><thead><tr><th>Месяц</th><th>Приходы</th><th>Возвраты</th><th style="text-align:right">Итог эталон − наши</th></tr></thead><tbody>` +
+    d.months.map(m => {
+      const i = dhKind(m.inc), r = dhKind(m.ret);
+      return `<tr>
+        <td style="font-weight:600">${escHtml(m.per)}</td>
+        <td><span style="color:${i.color}">${i.icon}</span> <span style="font-size:12px">${escHtml(i.txt)}</span></td>
+        <td><span style="color:${r.color}">${r.icon}</span> <span style="font-size:12px">${escHtml(r.txt)}</span></td>
+        <td style="text-align:right;color:${Math.abs(i.sum + r.sum) >= 50000 ? 'var(--red)' : 'var(--text2)'}">${fmt(i.sum + r.sum)}</td>
+      </tr>`; }).join('') + '</tbody></table>';
+  if (d.top && d.top.length) {
+    h += impTable(`Крупнейшее у ретро-поставщиков (${d.top.length})`,
+      ['Месяц', 'Вид', 'Поставщик в BigQuery', 'Что не так', 'Док.', 'Эталон − наши', 'Примеры'],
+      d.top.map(t => `<tr>
+        <td>${escHtml(t.per)}</td><td>${t.kind === 'inc' ? 'приходы' : 'возвраты'}</td>
+        <td>${escHtml(t.supplier)}</td><td>${escHtml(t.ru)}</td>
+        <td style="text-align:right">${t.docs}</td>
+        <td style="text-align:right;color:${t.delta < 0 ? 'var(--red)' : 'var(--green)'}">${fmt(t.delta)}</td>
+        <td style="font-size:11px;color:var(--text2)">${escHtml(t.sample)}</td></tr>`).join(''));
+  }
+  wrap.innerHTML = h;
 }
 
 async function uploadRetroExcel() {
