@@ -149,6 +149,30 @@ def supplier_month(D, sid, per, ctx, sku_calc, brands, sup):
     return rows
 
 
+def dedupe_shared_alias(rows):
+    """Общий алиас (Інтрейд Мікс: Батоша и Деліция; БІР Кег и Славутич): один и тот же непокрытый приход
+    виден у каждого поставщика алиаса, и оценка «недосчитано» задваивается.
+    Признак дубля: совпали месяц + баркод + сумма прихода. Оценку оставляем одному владельцу -
+    тому, у кого больше ретро в этом месяце (при равенстве - по имени), остальным ставим пометку."""
+    retro = defaultdict(float)
+    for r in rows:
+        retro[(r[1], r[0])] += r[14]
+    byk = defaultdict(list)
+    for r in rows:
+        if r[15]:
+            byk[(r[0], r[4], round(r[7], 2))].append(r)
+    n = 0
+    for rs in byk.values():
+        if len(rs) < 2:
+            continue
+        rs.sort(key=lambda r: (-retro[(r[1], r[0])], r[1]))
+        for r in rs[1:]:
+            r[10] += f"; дубль общего алиаса (учтено у «{rs[0][1]}»)"
+            r[15] = ""
+            n += 1
+    return n
+
+
 NAMES = {}              # баркод -> наименование из SKU-разбивки расчётов
 DETAILS_WITH_SKU = set()  # id строк расчёта, у которых есть SKU-разбивка (остальные - оплаты, фикс-бонус, доплаты)
 
@@ -261,6 +285,9 @@ def main():
             if not ctx["calcs"] and not D.bq_barcodes("inc", s, p):
                 continue
             rows += supplier_month(D, s, p, ctx, sku_calc, brands, sup)
+    dup = dedupe_shared_alias(rows)
+    if dup:
+        print(f"[i] общий алиас: у {dup} строк оценка снята, она осталась у одного владельца")
 
     by = defaultdict(lambda: [0, 0.0, 0.0, 0.0])   # статус -> [строк, приход, ретро, недосчитано]
     for r in rows:
