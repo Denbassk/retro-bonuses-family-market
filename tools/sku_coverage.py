@@ -188,20 +188,33 @@ def control(D, rows, sids, pers, sku_calc, sup):
     if not hits:
         print("    разниц больше 100 ₴ нет")
 
-    flags = {}
-    for r in rows:
-        flags[(r[1], r[0])] = bool("недогруз" in r[18] or "задвоено" in r[18])
-    grp = defaultdict(lambda: defaultdict(float))
-    for r in rows:
-        if r[15]:
-            grp["с флагами" if flags[(r[1], r[0])] else "без флагов"][r[10].split(";")[0]] += r[15]
-    print("\n[3-4] «недосчитано» по группам пар:")
-    for g in ("без флагов", "с флагами"):
-        tot = sum(grp[g].values())
-        n = sum(1 for k, v in flags.items() if v == (g == "с флагами"))
-        print(f"    {g} ({n} пар): итого {tot:,.0f} ₴")
-        for st, v in sorted(grp[g].items(), key=lambda x: -x[1]):
-            print(f"        {st[:40]:<42}{v:>12,.0f}")
+    blocks = [("январь-июнь (TRUTH_UNTIL, справочно)", [r for r in rows if r[0] <= "2026-06"]),
+              ("июль-август (рабочие месяцы)", [r for r in rows if r[0] > "2026-06"])]
+    for label, rs in blocks:
+        if not rs:
+            continue
+        flags = {(r[1], r[0]): bool("недогруз" in r[18] or "задвоено" in r[18]) for r in rs}
+        grp = defaultdict(lambda: defaultdict(float))
+        for r in rs:
+            if r[15]:
+                grp["с флагами" if flags[(r[1], r[0])] else "без флагов"][r[10].split(";")[0]] += r[15]
+        print(f"\n[3-4] {label}: строк {len(rs)}, пар {len(flags)}")
+        for g in ("без флагов", "с флагами"):
+            n = sum(1 for v in flags.values() if v == (g == "с флагами"))
+            print(f"    {g} ({n} пар): итого {sum(grp[g].values()):,.0f} ₴")
+            for st in ("вне правил", "сырьё", "исключён правилом"):
+                print(f"        {st:<24}{grp[g].get(st, 0.0):>12,.0f}")
+            other = {k: v for k, v in grp[g].items() if k not in ("вне правил", "сырьё", "исключён правилом")}
+            for st, v in sorted(other.items(), key=lambda x: -x[1]):
+                print(f"        {st[:24]:<24}{v:>12,.0f}")
+
+    work = [r for r in rows if r[0] > "2026-06"]
+    wf = {(r[1], r[0]): bool("недогруз" in r[18] or "задвоено" in r[18]) for r in work}
+    top = sorted([r for r in work if r[15] and not wf[(r[1], r[0])]], key=lambda r: -r[15])[:20]
+    print(f"\n[топ-20] июль-август, только пары без флагов данных:")
+    print(f"    {'месяц':<8}{'поставщик':<30}{'баркод':<15}{'наименование':<36}{'статус':<20}{'недосчитано':>12}")
+    for r in top:
+        print(f"    {r[0]:<8}{r[1][:29]:<30}{str(r[4]):<15}{(r[5] or '')[:34]:<36}{r[10][:19]:<20}{r[15]:>12,.0f}")
 
 
 def main():
@@ -219,11 +232,12 @@ def main():
     D = Data([], targets, docs=False)
 
     cids = [D.calc[(s, p)]["id"] for s in sids for p in pers if (s, p) in D.calc]
+    by_calc = {D.calc[(s, p)]["id"]: (s, p) for s in sids for p in pers if (s, p) in D.calc}
     sku_calc = {}
     for r in in_chunks("retro_calculation_sku_details", "calculation_id", cids,
                        "calculation_id,detail_id,barcode,product_name,quantity,amount_purchased,"
                        "amount_returned,applied_percent,retro_amount"):
-        c = next((k for k, v in D.calc.items() if v["id"] == r["calculation_id"]), None)
+        c = by_calc.get(r["calculation_id"])
         if not c:
             continue
         k = (c[0], c[1], str(r["barcode"]))
