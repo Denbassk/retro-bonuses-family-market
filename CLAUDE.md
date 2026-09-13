@@ -23,12 +23,12 @@ PowerShell на Windows, `D:\РЕТРО_БОНУСЫ Фэмэли маркет`.
 1. Парсер Excel — ГОТОВО (10 контрольных сумм сходятся).
 2. Маппинг имён — ЗАКРЫТО (`load_name_map.py --apply`, 49/49, автоугадывания нет).
 3. Запись фактов — ГОТОВО (`retro_payments_fact`, 304 строки, идемпотентно).
-4. Автосверка — код готов, сухой прогон OK. ЖДЁТ SQL, затем `core\reconcile_facts.py --apply`.
+4. Автосверка — ГОТОВО. Все три SQL-миграции и `tools\migrate_adjustment_modes.py --apply` применены,
+   сверка прогнана 11.09: `retro_reconciliation` 373 строки. Статусы: MATCH 139, MINOR 94, MISMATCH 49,
+   PENDING 48, ZERO_OK 21, NOT_EXPECTED 13, REDISTRIBUTION 7, NOT_PAID 1, MANUAL 1.
 5. Диагностика — код готов (`core\diagnose_retro.py`), запускается из сверки.
 
-Ждут выполнения в SQL Editor: `sql\2026-09-11_reconciliation.sql`,
-`sql\2026-09-11_import_journal.sql`, `sql\2026-09-11_adjustments_payment_mode.sql`
-(после последнего — `tools\migrate_adjustment_modes.py --apply`, потом reconcile --apply).
+Текущая задача: разбор MISMATCH 49 и PENDING 48.
 
 ## Инварианты: Excel фактов
 
@@ -109,8 +109,15 @@ PowerShell на Windows, `D:\РЕТРО_БОНУСЫ Фэмэли маркет`.
 - Корректировки — только через `retro_adjustments`, НЕ правкой
   `retro_calculation_details`. Режимы: `in_payment` (входит в total_retro строкой
   расчёта) и `separate` (только запись; при сравнении прибавляется к факту).
-- Доступ к Supabase — только через `core\sb.py` (пагинация, батчи). Перед правкой
-  общего хелпера найти все места вызова ПО СИМВОЛАМ, не текстовым поиском.
+- Цель: единая точка доступа `core/sb.py` (функции `get`/`upsert`/`_req`). Фактически 5 файлов
+  рабочего контура имеют локальные копии `sb_get`/`sb_post`: `core/calculate_retro.py`,
+  `core/import_payments.py`, `analysis/audit_bq_suppliers.py`, `tools/fix_brand_aliases.py`,
+  `tools/gen_payment_mapping_template.py`. Новый код — только через `sb.py`, существующие копии
+  не трогать без отдельной задачи. Перед правкой общего хелпера найти все места вызова
+  ПО СИМВОЛАМ, не текстовым поиском.
+- При поиске по символам исключать `_archive/` и `Бэкап/` — там 10 из 17 копий `load_env`
+  и устаревшие дубли `calculate_retro`/`import_payments`. Рабочий контур: `core/`, `sql/`,
+  `tools/`, `analysis/`.
 - Админку раздаёт `core\admin_server.py` (127.0.0.1:3000, токен на каждый POST).
   Старый http.server отдавал всю папку вместе с `.env` — не использовать.
 
