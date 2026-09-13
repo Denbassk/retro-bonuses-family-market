@@ -95,7 +95,8 @@ def in_chunks(table, col, ids, select, extra="", n=40):
 class Data:
     """Всё, что нужно гипотезам: справочники, расчёты, SKU-разбивка, факты, Excel, BigQuery."""
 
-    def __init__(self, recon_all, targets, no_bq=False):
+    def __init__(self, recon_all, targets, no_bq=False, docs=True):
+        """docs=False - не грузить документы BQ против эталона (нужно только диагностике пар)."""
         self.sup = {s["id"]: s["name"] for s in sb.get("suppliers", "select=id,name,returns_cutoff_day")}
         bsup = {b["id"]: b["supplier_id"] for b in sb.get("supplier_brands", "select=id,supplier_id")}
         self.rules = {}
@@ -158,7 +159,7 @@ class Data:
         self.bq = {} if no_bq else self.load_bq(targets, wide)
         # документы BQ против эталона Торгсофт (недогруз / задвоение / другая сумма / сдвиг даты)
         self.docs = None
-        if not no_bq:
+        if not no_bq and docs:
             names = {n for t in targets for s in t["members"] for n in self.aliases[s]["in"] | self.aliases[s]["ret"]}
             if names:
                 self.docs = bq_docs.load_all(pers[0], pers[-1], names)
