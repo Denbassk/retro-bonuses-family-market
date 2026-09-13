@@ -1,0 +1,6 @@
+{
+  "name": "retro-lean",
+  "version": "1.0.0",
+  "description": "Token-efficient working protocol for the retro-bonuses Family Market project: symbol-level code navigation, aggregate-first data inspection, minimal-diff edits.",
+  "author": { "name": "Denbassk" }
+}

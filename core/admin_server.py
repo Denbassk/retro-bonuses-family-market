@@ -76,25 +76,30 @@ def plan_to_json(plan):
             "manual": [m[0] for m in plan["manual"]]}
 
 
-def data_health():
+def data_health(retro_only=True):
     """Светофор по данным: агрегат последнего отчёта bq_docs.health() (output\\data_health_2026.csv).
-    Ничего не считает заново - отчёт пишется в конце reconcile_facts.py --apply."""
+    Ничего не считает заново - отчёт пишется в конце reconcile_facts.py --apply.
+    retro_only=True - только поставщики, по которым есть ретро (колонка «в ретро» отчёта)."""
     p = OUT / "data_health_2026.csv"
     if not p.exists():
         return {"ok": False, "error": "отчёта ещё нет - запустите «⟳ Пересверить»"}
+    import bq_docs
+    retro = bq_docs.retro_alias_names()   # свежий список: алиас + активное правило, а не просто алиас
     months, rows = {}, []
     with p.open(encoding="utf-8-sig", newline="") as fh:
         for r in csv.DictReader(fh, delimiter=";"):
+            is_retro = r["поставщик BQ"] in retro
+            if retro_only and not is_retro:
+                continue
             kind, per, typ = r["вид"], r["месяц"], r["тип"]
             n, d = int(r["документов"] or 0), float(r["эталон - наши"] or 0)
             t = months.setdefault(per, {"per": per, "inc": {}, "ret": {}})[kind].setdefault(
                 typ, {"ru": r["тип_ru"], "n": 0, "delta": 0.0})
             t["n"] += n
             t["delta"] = round(t["delta"] + d, 2)
-            if r["в ретро"]:
-                rows.append({"kind": kind, "per": per, "supplier": r["поставщик BQ"], "type": typ, "ru": r["тип_ru"],
-                             "docs": n, "delta": round(d, 2), "sample": (r["примеры"] or "")[:160]})
-    return {"ok": True, "file": p.name,
+            rows.append({"kind": kind, "per": per, "supplier": r["поставщик BQ"], "type": typ, "retro": is_retro,
+                         "docs": n, "delta": round(d, 2), "sample": (r["примеры"] or "")[:160]})
+    return {"ok": True, "file": p.name, "retro_only": retro_only,
             "updated": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat(timespec="minutes"),
             "months": [months[k] for k in sorted(months)],
             "top": sorted(rows, key=lambda x: -abs(x["delta"]))[:8]}
@@ -191,7 +196,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/data-health":
             if not self.who():
                 return self.send_json(401, {"error": "нужен вход в админку"})
-            return self.send_json(200, data_health())
+            scope = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("scope", ["retro"])[0]
+            return self.send_json(200, data_health(retro_only=scope != "all"))
         if path.startswith("/api/jobs/"):
             if not self.who():
                 return self.send_json(401, {"error": "нужен вход в админку"})

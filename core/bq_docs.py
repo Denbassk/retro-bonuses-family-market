@@ -222,9 +222,23 @@ def main():
     health(a.per_from, per_to, {a.supplier} if a.supplier else None)
 
 
+def retro_alias_names():
+    """Имена в BigQuery, по которым РЕАЛЬНО есть ретро: алиас привязан к бренду/поставщику с активным правилом.
+    Просто наличие алиаса не значит ретро (Кока-Кола, Алко Трейдінг заведены, но правил нет)."""
+    brands = {b["id"]: b["supplier_id"] for b in sb.get("supplier_brands", "select=id,supplier_id")}
+    rule_brands = {r["supplier_brand_id"] for r in sb.get("retro_rules", "status=eq.active&select=supplier_brand_id")}
+    rule_sups = {brands[b] for b in rule_brands if b in brands}
+    out = set()
+    for a in sb.get("supplier_aliases", "alias_type=neq.excluded&select=alias_name,supplier_id,supplier_brand_id"):
+        nm = (a.get("alias_name") or "").strip()
+        if nm and (a["supplier_brand_id"] in rule_brands if a.get("supplier_brand_id") else a.get("supplier_id") in rule_sups):
+            out.add(nm)
+    return out
+
+
 def health(per_from, per_to, names=None):
     """Полнота и дубли базы по всем поставщикам: таблица по месяцам + крупнейшие у ретро-поставщиков -> CSV."""
-    retro_names = {(x.get("alias_name") or "").strip() for x in sb.get("supplier_aliases", "alias_type=neq.excluded&select=alias_name")}
+    retro_names = retro_alias_names()
     data = load_all(per_from, per_to, names)
     pers, p = [], per_from
     while p <= per_to:
