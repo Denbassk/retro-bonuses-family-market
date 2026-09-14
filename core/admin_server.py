@@ -97,11 +97,19 @@ def data_health(retro_only=True):
             kind, per, typ = r["вид"], r["месяц"], r["тип"]
             n, d = int(r["документов"] or 0), float(r["эталон - наши"] or 0)
             t = months.setdefault(per, {"per": per, "inc": {}, "ret": {}})[kind].setdefault(
-                typ, {"ru": r["тип_ru"], "n": 0, "delta": 0.0})
+                typ, {"ru": r["тип_ru"], "n": 0, "delta": 0.0, "days": []})
             t["n"] += n
             t["delta"] = round(t["delta"] + d, 2)
+            # «даты» отчёта - «дд.мм» или «дд.мм-дд.мм»: внутри месяца края берутся сортировкой по дню
+            t["days"] += [x for x in (r.get("даты") or "").split("-") if x]
             rows.append({"kind": kind, "per": per, "supplier": r["поставщик BQ"], "type": typ, "retro": is_retro,
-                         "docs": n, "delta": round(d, 2), "sample": (r["примеры"] or "")[:160]})
+                         "docs": n, "delta": round(d, 2), "sample": (r["примеры"] or "")[:160],
+                         "dates": r.get("даты") or "", "numbers": r.get("номера") or ""})
+    for m in months.values():
+        for k in ("inc", "ret"):
+            for t in m[k].values():
+                dd = sorted(t.pop("days"))
+                t["range"] = "" if not dd else (dd[0] if dd[0] == dd[-1] else f"{dd[0]}-{dd[-1]}")
     return {"ok": True, "file": p.name, "retro_only": retro_only,
             "updated": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat(timespec="minutes"),
             "months": [months[k] for k in sorted(months)],

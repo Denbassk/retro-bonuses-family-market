@@ -341,7 +341,9 @@ function dhKind(t) {
   return { icon: light[0], color: light[1], sum,
            txt: own.map(x => {
              const T = DH_TYPES[x[0]] || { what: x[0], fix: '' };
-             return `${T.what}: ${x[1].n} док. на ${fmt(Math.abs(x[1].delta))} ₴` + (T.fix && T.fix !== 'ничего не делать' ? ` → ${T.fix}` : '');
+             // диапазон дат: сразу видно, какой кусок месяца догружать или где искать дубли
+             const rng = x[1].range ? ` <span style="color:var(--text2)">[${escHtml(x[1].range)}]</span>` : '';
+             return `${T.what}: ${x[1].n} док. на ${fmt(Math.abs(x[1].delta))} ₴${rng}` + (T.fix && T.fix !== 'ничего не делать' ? ` → ${T.fix}` : '');
            }).join('<br>') || 'всё сходится с Торгсофтом' };
 }
 
@@ -374,7 +376,8 @@ async function showDataHealth(scope) {
       </tr>`; }).join('') + '</tbody></table>';
   if (d.top && d.top.length) {
     h += impTable(`Самое крупное — с этого и начинать (${d.top.length})`,
-      ['Месяц', 'Приходы / возвраты', 'Поставщик в BigQuery', 'Что случилось', 'Что делать', 'Док.', 'Сумма, ₴', 'Документы'],
+      ['Месяц', 'Приходы / возвраты', 'Поставщик в BigQuery', 'Что случилось', 'Что делать', 'Док.', 'Сумма, ₴',
+       'Даты', 'Номера', 'Примеры'],
       d.top.map(t => {
         const T = DH_TYPES[t.type] || { what: t.type, fix: '' };
         return `<tr>
@@ -383,6 +386,8 @@ async function showDataHealth(scope) {
         <td>${escHtml(T.what)}</td><td style="font-size:12px;color:var(--text2)">${escHtml(T.fix)}</td>
         <td style="text-align:right">${t.docs}</td>
         <td style="text-align:right;color:${t.delta < 0 ? 'var(--red)' : 'var(--green)'}">${fmt(t.delta)}</td>
+        <td style="white-space:nowrap">${escHtml(t.dates || '')}</td>
+        <td style="font-size:12px;white-space:nowrap">${escHtml(t.numbers || '')}</td>
         <td style="font-size:11px;color:var(--text2)">${escHtml(t.sample)}</td></tr>`; }).join(''));
   }
   wrap.innerHTML = h;

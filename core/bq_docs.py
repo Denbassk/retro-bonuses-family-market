@@ -236,6 +236,24 @@ def retro_alias_names():
     return out
 
 
+def doc_range(evs, typ):
+    """Диапазон проблемных документов -> («20.07-23.07», «№18479-№25113 (34)»).
+    Чтобы по сводке было сразу видно, какой кусок базы подгружать или где искать дубли.
+    У «нет у нас» и «задвоено в эталоне» диапазон берём по эталонным датам, у остальных - по нашим."""
+    src_e = typ in ("missing", "et_double")
+    ds, ns = [], set()
+    for ev in evs:
+        ds += [d for d, *_ in (ev["e"] if src_e else ev["o"])]
+        if ev.get("number"):
+            ns.add(str(ev["number"]))
+    ds = sorted(x for x in ds if x)
+    ns = sorted(ns, key=lambda x: (len(x), x) if x.isdigit() else (99, x))
+    dm = lambda d: f"{d[8:10]}.{d[5:7]}"
+    dr = "" if not ds else (dm(ds[0]) if ds[0] == ds[-1] else f"{dm(ds[0])}-{dm(ds[-1])}")
+    nr = "" if not ns else (f"№{ns[0]}" if len(ns) == 1 else f"№{ns[0]}-№{ns[-1]} ({len(ns)} док.)")
+    return dr, nr
+
+
 def health(per_from, per_to, names=None):
     """Полнота и дубли базы по всем поставщикам: таблица по месяцам + крупнейшие у ретро-поставщиков -> CSV."""
     retro_names = retro_alias_names()
@@ -265,18 +283,22 @@ def health(per_from, per_to, names=None):
                     c[1] += ev["eff"][per]
             for sup, types in by_sup.items():
                 for typ, (n, dl) in types.items():
-                    ex = [doc_label(ev) for ev in summ[typ]["docs"] if ev["supplier"] == sup][:3]
-                    rows.append([kind, per, sup, "да" if sup in retro_names else "", typ, TYPE_RU[typ], n, round(dl, 2), " | ".join(ex)])
+                    evs = [ev for ev in summ[typ]["docs"] if ev["supplier"] == sup]
+                    dr, nr = doc_range(evs, typ)
+                    rows.append([kind, per, sup, "да" if sup in retro_names else "", typ, TYPE_RU[typ], n, round(dl, 2),
+                                 dr, nr, " | ".join(doc_label(ev) for ev in evs[:3])])
         big = sorted([r for r in rows if r[0] == kind and r[3] and r[4] in ("missing", "double", "amount")],
                      key=lambda r: -abs(r[7]))[:12]
         if big:
             print("    крупнейшие у ретро-поставщиков (недогруз / задвоение / сумма):")
             for r in big:
-                print(f"      {r[1]} {r[2][:32]:<32} {r[5]:<24} {r[6]:>3} док. {n0(r[7], True):>10}  {r[8][:90]}")
+                print(f"      {r[1]} {r[2][:32]:<32} {r[5]:<20} {r[6]:>3} док. {n0(r[7], True):>10}  "
+                      f"{r[8]:<12} {r[9][:28]:<28} {r[10][:60]}")
     dst = OUT / "data_health_2026.csv"
     with dst.open("w", newline="", encoding="utf-8-sig") as fh:
         w = csv.writer(fh, delimiter=";")
-        w.writerow(["вид", "месяц", "поставщик BQ", "в ретро", "тип", "тип_ru", "документов", "эталон - наши", "примеры"])
+        w.writerow(["вид", "месяц", "поставщик BQ", "в ретро", "тип", "тип_ru", "документов", "эталон - наши",
+                    "даты", "номера", "примеры"])
         w.writerows(sorted(rows, key=lambda r: (r[0], r[1], -abs(r[7]))))
     print(f"\n[>] {dst.relative_to(OUT.parent)}")
 
