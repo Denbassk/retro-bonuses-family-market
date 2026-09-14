@@ -15,7 +15,7 @@ sku_coverage.py - позиционный отчёт: какие SKU постав
   python tools\\sku_coverage.py --supplier "Юрія" --month 2026-07 --dry-run
   python tools\\sku_coverage.py --from 2026-01 --to 2026-08        -> output\\sku_coverage_2026.csv
 """
-import sys, csv, argparse
+import sys, re, csv, argparse
 from collections import defaultdict
 from decimal import Decimal
 from pathlib import Path
@@ -74,7 +74,21 @@ def rep_rule(D, sid, per, ctx):
     return act[0] if act else None
 
 
-def supplier_month(D, sid, per, ctx, sku_calc, brands, sup):
+def first_word(name):
+    """Семейство товара = первое слово наименования: «Авангард Грінки...» -> avangard, «До Бочкового...» -> do."""
+    w = re.split(r"[\s,./]+", (name or "").strip().lower())
+    return w[0] if w and w[0] else ""
+
+
+def has_money(r):
+    """Строка попадает в отчёт, только если по ней есть деньги или вопрос по деньгам:
+    начислено ретро, есть оценка «недосчитано», либо SKU в правиле и по нему был приход
+    (в правиле + приход, но ретро 0 - это как раз то, что надо увидеть).
+    Всё остальное - сырьё, исключения, чужие правила, поставщики без правил - шум."""
+    return bool(r[14]) or bool(r[15]) or (r[10].startswith("в правиле") and r[7] > 0)
+
+
+def supplier_month(D, sid, per, ctx, sku_calc, brands, sup, fam=None):
     """Строки отчёта по одному поставщику-месяцу. Логика статусов - как в diagnose_retro.h_sku."""
     rows = []
     names_in = D.aliases[sid]["in"]
@@ -126,7 +140,10 @@ def supplier_month(D, sid, per, ctx, sku_calc, brands, sup):
         elif not act:
             status = "нет активных правил в месяце"
         else:
-            status = "вне правил"
+            # Грінки Авангарда - тот же бренд, что в правилах, значит дыра и деньги.
+            # «До Бочкового» - семейство, которого в правилах нет вовсе: ретро по нему не положено.
+            nm0 = (c or {}).get("product_name") or D.bq.get("names", {}).get(bc) or NAMES.get(bc, "")
+            status = "вне правил" if first_word(nm0) in (fam or {}).get(sid, ()) else "вне правил: бренд не в ретро"
         if no_income:
             status += "; база не от приходов"
 
@@ -134,7 +151,10 @@ def supplier_month(D, sid, per, ctx, sku_calc, brands, sup):
         under = ""   # у покрытых ретро уже посчитано; у баз не от приходов приход - не база
         # у «чужих» SKU (общий алиас, БІР Кег/Славутич) ретро уже посчитано у другого поставщика - не считать
         # «ещё не действует» - не недосчёт: договор в этом месяце не работал
-        if not mine and not others and base > 0 and rate and not no_income and not status.startswith("правило ещё не"):
+        # сырьё и исключённые баркоды - это наше собственное решение «ретро не положено», не недосчёт
+        if (not mine and not others and base > 0 and rate and not no_income
+                and not status.startswith(("правило ещё не", "сырьё", "исключён правилом"))
+                and "бренд не в ретро" not in status):
             under = float(apply_vat(Decimal(str(round(base, 2))) * Decimal(str(rate)) / Decimal("100"), rep or {}))
         rows.append([
             per, sup.get(sid, "?"), ", ".join(sorted(names_in)),
@@ -255,6 +275,8 @@ def main():
     ap.add_argument("--to", dest="per_to", default=None)
     ap.add_argument("--dry-run", action="store_true", help="посчитать и показать итоги, CSV не писать")
     ap.add_argument("--control", action="store_true", help="контроль по парам: сверка сумм и «недосчитано» по флагам")
+    ap.add_argument("--all", action="store_true", dest="show_all",
+                    help="показать всё, включая позиции и поставщиков, по которым ретро не положено")
     a = ap.parse_args()
     sids, pers, brands, sup = scope(a.supplier, a.month or a.per_from, a.month or a.per_to)
     targets = [{"members": (s,), "per": p} for s in sorted(sids) for p in pers]
@@ -278,16 +300,37 @@ def main():
         NAMES.setdefault(str(r["barcode"]), r.get("product_name") or "")
         DETAILS_WITH_SKU.add(r["detail_id"])
 
+    # Семейства товара, по которым у поставщика ретро вообще бывает: первые слова наименований
+    # тех SKU, что перечислены в его правилах или уже попали в расчёт.
+    # «Авангард Грінки» - то же семейство, что «Авангард Сухарики» в правиле, значит дыра и деньги.
+    # «До Бочкового» у того же поставщика - семейства нет ни в одном правиле, ретро по нему не положено.
+    fam = defaultdict(set)
+    for s in sids:
+        bcs = {str(b) for r in D.rules_by_sup[s] for b in (r.get("sku_barcodes") or [])}
+        bcs |= {k[2] for k in sku_calc if k[0] == s}
+        for b in bcs:
+            w = first_word(NAMES.get(b) or D.bq.get("names", {}).get(b) or "")
+            if w:
+                fam[s].add(w)
+
     rows = []
     for s in sorted(sids, key=lambda x: sup.get(x, "")):
         for p in pers:
             ctx = pair_context(D, {"members": (s,), "per": p})
             if not ctx["calcs"] and not D.bq_barcodes("inc", s, p):
                 continue
-            rows += supplier_month(D, s, p, ctx, sku_calc, brands, sup)
+            rows += supplier_month(D, s, p, ctx, sku_calc, brands, sup, fam)
     dup = dedupe_shared_alias(rows)
     if dup:
         print(f"[i] общий алиас: у {dup} строк оценка снята, она осталась у одного владельца")
+
+    all_rows = rows
+    if not a.show_all:
+        rows = [r for r in rows if has_money(r)]
+        hid_sup = len({r[1] for r in all_rows}) - len({r[1] for r in rows})
+        print(f"[i] шум убран: скрыто строк {len(all_rows) - len(rows)}"
+              f"{f', поставщиков целиком {hid_sup}' if hid_sup else ''}"
+              f" - позиции и поставщики, по которым ретро не положено (--all покажет всё)")
 
     by = defaultdict(lambda: [0, 0.0, 0.0, 0.0])   # статус -> [строк, приход, ретро, недосчитано]
     for r in rows:
@@ -311,7 +354,7 @@ def main():
         for r in top:
             print(f"    {r[0]:<8}{r[1][:27]:<28}{str(r[4]):<15}{(r[5] or '')[:38]:<40}{r[10][:25]:<26}{r[15]:>12,.0f}")
     if a.control:
-        control(D, rows, sids, pers, sku_calc, sup)
+        control(D, all_rows, sids, pers, sku_calc, sup)   # контроль всегда по полному набору строк
     done = sum(r[14] for r in rows)
     ctrl = sum(v["retro_amount"] for k, v in sku_calc.items() if k[0] in sids and k[1] in pers)
     calc_total = sum(f2(D.calc[(s, p)]["total_retro"]) for s in sids for p in pers if (s, p) in D.calc)
